@@ -2,7 +2,7 @@ use core::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, 
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 #[repr(transparent)]
-pub struct Block(pub(super) usize);
+pub struct Block(pub usize);
 
 impl Block {
     #[inline]

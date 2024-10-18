@@ -8,7 +8,7 @@ use core::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, 
 
 #[derive(Copy, Clone, Debug)]
 #[repr(transparent)]
-pub struct Block(pub(super) __m128i);
+pub struct Block(pub __m128i);
 
 impl Block {
     #[inline]

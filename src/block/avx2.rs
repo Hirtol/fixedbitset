@@ -6,7 +6,7 @@ use core::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, 
 
 #[derive(Copy, Clone, Debug)]
 #[repr(transparent)]
-pub struct Block(pub(super) __m256i);
+pub struct Block(pub __m256i);
 
 impl Block {
     #[inline]

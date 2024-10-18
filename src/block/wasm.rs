@@ -5,7 +5,7 @@ use core::{
 
 #[derive(Copy, Clone, Debug)]
 #[repr(transparent)]
-pub struct Block(pub(super) v128);
+pub struct Block(pub v128);
 
 impl Block {
     #[inline]
