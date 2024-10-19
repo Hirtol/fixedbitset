@@ -1,4 +1,3 @@
-use crate::offset::iter::OverlapIter;
 use crate::SimdBlock;
 use crate::{Block, FixedBitSet, IndexRange};
 use alloc::vec::Vec;
@@ -239,12 +238,14 @@ impl<T: AsRef<[SimdBlock]>> OffsetBitSet<T> {
 
     /// Return the amount of [SimdBlock]s
     #[inline(always)]
+    #[allow(dead_code)]
     fn len(&self) -> usize {
         self.as_simd_blocks().len()
     }
 
     /// Return the length of the OffsetBitSet if it was instead a full [FixedBitSet]
     #[inline(always)]
+    #[allow(dead_code)]
     fn root_block_len(&self) -> usize {
         self.root_block_offset as usize + self.len()
     }
@@ -267,11 +268,13 @@ impl<T: AsRef<[SimdBlock]>> OffsetBitSet<T> {
 }
 
 impl<T: AsMut<[SimdBlock]> + AsRef<[SimdBlock]>> OffsetBitSet<T> {
+    #[allow(dead_code)]
     #[inline(always)]
     fn simd_blocks_mut(&mut self) -> &mut [SimdBlock] {
         self.blocks.as_mut()
     }
 
+    #[allow(dead_code)]
     #[inline(always)]
     fn sub_blocks_mut(&mut self) -> &mut [Block] {
         // SAFETY: The representations of SimdBlock and Block are guaranteed to be interchangeable.
@@ -300,13 +303,13 @@ impl<'a> OffsetBitSet<&'a [SimdBlock]> {
 
 impl<T: AsRef<[SimdBlock]>> BitSet for OffsetBitSet<T> {
     #[inline(always)]
-    fn as_simd_blocks(&self) -> impl ExactSizeIterator<Item=&SimdBlock> + DoubleEndedIterator {
-        self.simd_blocks().into_iter()
+    fn as_simd_blocks(&self) -> impl ExactSizeIterator<Item=SimdBlock> + DoubleEndedIterator {
+        self.simd_blocks().iter().copied()
     }
 
     #[inline(always)]
-    fn as_sub_blocks(&self) -> impl ExactSizeIterator<Item=&Block> + DoubleEndedIterator {
-       self.sub_blocks().into_iter()
+    fn as_sub_blocks(&self) -> impl ExactSizeIterator<Item=Block> + DoubleEndedIterator {
+       self.sub_blocks().iter().copied()
     }
 
     #[inline(always)]
@@ -318,6 +321,30 @@ impl<T: AsRef<[SimdBlock]>> BitSet for OffsetBitSet<T> {
     fn root_block_offset(&self) -> usize {
         self.root_block_offset as usize
     }
+}
+
+pub fn test_subset() {
+    let mut base_collection = OffsetBitSetCollection::new();
+
+    // Safety: The vec is guaranteed to be aligned.
+    let index = base_collection.push_collection(&[128, 129, 256]);
+    let other = base_collection.push_collection(&[129, 256]);
+
+    let set = base_collection.get_set_ref(index);
+    let other = base_collection.get_set_ref(other);
+    assert!(other.is_subset(&set));
+
+    let mut fixed = set.as_fixed_bit_set(400);
+    assert!(other.is_subset(&fixed));
+    fixed.remove(129);
+    assert!(!other.is_subset(&fixed));
+
+    let index = base_collection.push_collection(&[3, 128, 129, 256]);
+    let other_new = base_collection.push_collection(&[3, 256]);
+
+    let other_new = base_collection.get_set_ref(other_new);
+    let set = base_collection.get_set_ref(index);
+    assert!(other_new.is_subset(&set));
 }
 
 #[cfg(test)]

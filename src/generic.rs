@@ -1,12 +1,13 @@
-use crate::{Block, Ones, SimdBlock, Zeroes, BITS};
+use crate::{Block, FixedBitSet, Ones, SimdBlock, Zeroes, BITS};
+use crate::iter::SimdToSubIter;
 use crate::offset::iter::OverlapIter;
 
 pub trait BitSet: Sized {
     /// Return the internal SIMD blocks of the [BitSet]
-    fn as_simd_blocks(&self) -> impl ExactSizeIterator<Item=&SimdBlock> + DoubleEndedIterator;
+    fn as_simd_blocks(&self) -> impl ExactSizeIterator<Item=SimdBlock> + DoubleEndedIterator;
 
     /// Return sub-block representations of the [SimdBlock]s
-    fn as_sub_blocks(&self) -> impl ExactSizeIterator<Item=&Block> + DoubleEndedIterator;
+    fn as_sub_blocks(&self) -> impl ExactSizeIterator<Item=Block> + DoubleEndedIterator;
 
     /// Return the amount of bits allocated to this [BitSet]
     fn bit_len(&self) -> usize;
@@ -26,7 +27,7 @@ pub trait BitSet: Sized {
         if overlap.len() == 0 {
             false
         } else {
-            overlap.all(|(x, y)| x.andnot(*y).is_empty())
+            overlap.all(|(x, y)| x.andnot(y).is_empty())
         }
     }
 
@@ -42,7 +43,7 @@ pub trait BitSet: Sized {
     fn overlap<'a>(
         &'a self,
         other: &'a impl BitSet,
-    ) -> OverlapIter<'a, impl Iterator<Item=(&'a SimdBlock, &'a SimdBlock)>> {
+    ) -> OverlapIter<'a, impl DoubleEndedIterator<Item=(SimdBlock, SimdBlock)> + ExactSizeIterator> {
         crate::iter::new_overlap(self, other)
     }
 
@@ -76,17 +77,69 @@ pub trait BitSet: Sized {
     fn root_block_len(&self) -> usize {
         self.root_block_offset() + self.as_simd_blocks().len()
     }
+    
+    /// Create a new lazy bitset which will only perform the `AND` when needed.
+    /// 
+    /// Note that the result is not cached, so it would be repeated every invocation!
+    #[inline(always)]
+    fn lazy_and<'a, T: BitSet>(&'a self, other: &'a T) -> LazyAnd<'a, Self, T> {
+        LazyAnd {
+            left: self,
+            right: other,
+        }
+    }
+
+    /// Turn this [BitSet] into a [FixedBitSet] with the given capacity.
+    /// 
+    /// # Panic
+    /// 
+    /// Will panic if the number of bits is too small too hold the values of the current set.
+    fn as_fixed_bit_set(&self, bits: usize) -> FixedBitSet {
+        let bits_to_start = self.root_block_offset() * SimdBlock::BITS;
+        let total_bits = bits_to_start + self.as_simd_blocks().len() * SimdBlock::BITS;
+        assert!(total_bits < bits, "Creating a FixedBitSet out of an OffsetBitSet requires the total `bits` ({bits}) count to be larger than the OffsetBitSet's size ({total_bits})");
+
+        let sblock_count = self.root_block_offset() * SimdBlock::USIZE_COUNT;
+        let repeat = core::iter::repeat_n(0, sblock_count)
+            .chain(self.as_simd_blocks().flat_map(|v| v.into_usize_array()))
+            .chain(core::iter::repeat(0));
+        FixedBitSet::with_capacity_and_blocks(bits, repeat)
+    }
 }
 
-pub struct LazyApplication {
+pub struct LazyAnd<'a, A, B> {
+    left: &'a A,
+    right: &'a B,
+}
 
+impl<'a, A: BitSet, B: BitSet> BitSet for LazyAnd<'a, A, B> {
+    #[inline]
+    fn as_simd_blocks(&self) -> impl ExactSizeIterator<Item=SimdBlock> + DoubleEndedIterator {
+        self.left.overlap(self.right)
+            .map(|(x, y)| x & y)
+    }
+
+    #[inline(always)]
+    fn as_sub_blocks(&self) -> impl ExactSizeIterator<Item=Block> + DoubleEndedIterator {
+        SimdToSubIter::new(self.as_simd_blocks())
+    }
+
+    #[inline(always)]
+    fn bit_len(&self) -> usize {
+        self.left.bit_len().min(self.right.bit_len())
+    }
+
+    #[inline(always)]
+    fn root_block_offset(&self) -> usize {
+        crate::iter::overlap_start(self.left, self.right)
+    }
 }
 
 #[inline]
-pub(crate) fn ones_impl(set: &impl BitSet) -> Ones<impl ExactSizeIterator<Item=&usize>> {
+pub(crate) fn ones_impl<'a>(set: &'a impl BitSet) -> Ones<'a, impl ExactSizeIterator<Item=usize> + DoubleEndedIterator + 'a> {
     let mut itr = set.as_sub_blocks();
-    if let Some(&first_block) = itr.next() {
-        let last_block = *itr.next_back().unwrap_or(&0);
+    if let Some(first_block) = itr.next() {
+        let last_block = itr.next_back().unwrap_or(0);
         Ones {
             bitset_front: first_block,
             bitset_back: last_block,
@@ -108,20 +161,49 @@ pub(crate) fn ones_impl(set: &impl BitSet) -> Ones<impl ExactSizeIterator<Item=&
 }
 
 #[inline]
-pub(crate) fn zeroes_impl(set: &impl BitSet) -> Zeroes {
-    // match set.as_sub_blocks().split_first() {
-    //     Some((&block, rem)) => Zeroes {
-    //         bitset: !block,
-    //         block_idx: 0,
-    //         len: set.bit_len(),
-    //         remaining_blocks: rem.iter(),
-    //     },
-    //     None => Zeroes {
-    //         bitset: !0,
-    //         block_idx: 0,
-    //         len: set.bit_len(),
-    //         remaining_blocks: [].iter(),
-    //     },
-    // }
-    todo!()
+pub(crate) fn zeroes_impl<'a>(set: &'a impl BitSet) -> Zeroes<'a, impl ExactSizeIterator<Item=usize> + DoubleEndedIterator + 'a> {
+    let mut itr = set.as_sub_blocks();
+    match itr.next() {
+        Some(block) => Zeroes {
+            bitset: !block,
+            block_idx: 0,
+            len: set.bit_len(),
+            remaining_blocks: itr,
+            _phantom: Default::default(),
+        },
+        None => Zeroes {
+            bitset: !0,
+            block_idx: 0,
+            len: set.bit_len(),
+            remaining_blocks: itr,
+            _phantom: Default::default(),
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec::Vec;
+    use crate::generic::{BitSet, LazyAnd};
+    use crate::OffsetBitSetCollection;
+
+    #[test]
+    pub fn test_lazy_and() {
+        let mut base_collection = OffsetBitSetCollection::new();
+
+        // Safety: The vec is guaranteed to be aligned.
+        let left_idx = base_collection.push_collection(&[128, 129, 256]);
+        let right_idx = base_collection.push_collection(&[129, 256]);
+
+        let left = base_collection.get_set_ref(left_idx);
+        let right = base_collection.get_set_ref(right_idx);
+
+        let combined = LazyAnd {
+            left: &left,
+            right: &right,
+        };
+
+        let out = combined.ones().collect::<Vec<_>>();
+        assert_eq!(out, vec![129, 256]);
+    }
 }

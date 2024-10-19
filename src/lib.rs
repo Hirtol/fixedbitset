@@ -764,7 +764,7 @@ impl FixedBitSet {
                     bitset_back: last_block,
                     block_idx_front: 0,
                     block_idx_back: (1 + rem.len()) * BITS,
-                    remaining_blocks: rem.iter(),
+                    remaining_blocks: rem.iter().copied(),
                     _phantom: Default::default(),
                 }
             }
@@ -773,7 +773,7 @@ impl FixedBitSet {
                 bitset_back: 0,
                 block_idx_front: 0,
                 block_idx_back: 0,
-                remaining_blocks: [].iter(),
+                remaining_blocks: [].iter().copied(),
                 _phantom: Default::default(),
             },
         }
@@ -826,13 +826,15 @@ impl FixedBitSet {
                 bitset: !block,
                 block_idx: 0,
                 len: self.len(),
-                remaining_blocks: rem.iter(),
+                remaining_blocks: rem.iter().copied(),
+                _phantom: Default::default(),
             },
             None => Zeroes {
                 bitset: !0,
                 block_idx: 0,
                 len: self.len(),
-                remaining_blocks: [].iter(),
+                remaining_blocks: [].iter().copied(),
+                _phantom: Default::default(),
             },
         }
     }
@@ -1024,13 +1026,13 @@ impl FixedBitSet {
 
 impl generic::BitSet for FixedBitSet {
     #[inline(always)]
-    fn as_simd_blocks(&self) -> impl ExactSizeIterator<Item=&SimdBlock> + DoubleEndedIterator {
-        self.as_simd_slice().iter()
+    fn as_simd_blocks(&self) -> impl ExactSizeIterator<Item=SimdBlock> + DoubleEndedIterator {
+        self.as_simd_slice().iter().copied()
     }
 
     #[inline(always)]
-    fn as_sub_blocks(&self) -> impl ExactSizeIterator<Item=&Block> + DoubleEndedIterator {
-        self.as_slice().iter()
+    fn as_sub_blocks(&self) -> impl ExactSizeIterator<Item=Block> + DoubleEndedIterator {
+        self.as_slice().iter().copied()
     }
 
     #[inline(always)]
@@ -1314,7 +1316,7 @@ impl ExactSizeIterator for Masks {}
 /// An  iterator producing the indices of the set bit in a set.
 ///
 /// This struct is created by the [`FixedBitSet::ones`] method.
-pub struct Ones<'a, I = core::slice::Iter<'a, usize> > {
+pub struct Ones<'a, I = core::iter::Copied<core::slice::Iter<'a, usize>>> {
     bitset_front: usize,
     bitset_back: usize,
     block_idx_front: usize,
@@ -1323,7 +1325,7 @@ pub struct Ones<'a, I = core::slice::Iter<'a, usize> > {
     _phantom: PhantomData<&'a ()>
 }
 
-impl<'a, I: Iterator<Item=&'a usize>> Ones<'a, I> {
+impl<'a, I: Iterator<Item=usize>> Ones<'a, I> {
     #[inline]
     pub fn last_positive_bit_and_unset(n: &mut usize) -> usize {
         // Find the last set bit using x & -x
@@ -1351,7 +1353,7 @@ impl<'a, I: Iterator<Item=&'a usize>> Ones<'a, I> {
     }
 }
 
-impl<'a, I: DoubleEndedIterator<Item=&'a usize>> DoubleEndedIterator for Ones<'a, I>{
+impl<'a, I: DoubleEndedIterator<Item=usize>> DoubleEndedIterator for Ones<'a, I>{
     fn next_back(&mut self) -> Option<Self::Item> {
         while self.bitset_back == 0 {
             match self.remaining_blocks.next_back() {
@@ -1369,7 +1371,7 @@ impl<'a, I: DoubleEndedIterator<Item=&'a usize>> DoubleEndedIterator for Ones<'a
                     }
                 }
                 Some(next_block) => {
-                    self.bitset_back = *next_block;
+                    self.bitset_back = next_block;
                     self.block_idx_back -= BITS;
                 }
             };
@@ -1382,7 +1384,7 @@ impl<'a, I: DoubleEndedIterator<Item=&'a usize>> DoubleEndedIterator for Ones<'a
     }
 }
 
-impl<'a, I: Iterator<Item=&'a usize>> Iterator for Ones<'a, I> {
+impl<'a, I: Iterator<Item=usize>> Iterator for Ones<'a, I> {
     type Item = usize; // the bit position of the '1'
 
     #[inline]
@@ -1390,7 +1392,7 @@ impl<'a, I: Iterator<Item=&'a usize>> Iterator for Ones<'a, I> {
         while self.bitset_front == 0 {
             match self.remaining_blocks.next() {
                 Some(next_block) => {
-                    self.bitset_front = *next_block;
+                    self.bitset_front = next_block;
                     self.block_idx_front += BITS;
                 }
                 None => {
@@ -1423,25 +1425,26 @@ impl<'a, I: Iterator<Item=&'a usize>> Iterator for Ones<'a, I> {
 }
 
 // Ones will continue to return None once it first returns None.
-impl<'a, I: FusedIterator<Item=&'a usize>> FusedIterator for Ones<'a, I> {}
+impl<'a, I: FusedIterator<Item=usize>> FusedIterator for Ones<'a, I> {}
 
 /// An  iterator producing the indices of the set bit in a set.
 ///
 /// This struct is created by the [`FixedBitSet::ones`] method.
-pub struct Zeroes<'a> {
+pub struct Zeroes<'a, I = core::iter::Copied<core::slice::Iter<'a, usize>>> {
     bitset: usize,
     block_idx: usize,
     len: usize,
-    remaining_blocks: core::slice::Iter<'a, usize>,
+    remaining_blocks: I,
+    _phantom: PhantomData<&'a ()>
 }
 
-impl<'a> Iterator for Zeroes<'a> {
+impl<'a, I: Iterator<Item=usize>> Iterator for Zeroes<'a, I> {
     type Item = usize; // the bit position of the '1'
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         while self.bitset == 0 {
-            self.bitset = !*self.remaining_blocks.next()?;
+            self.bitset = !self.remaining_blocks.next()?;
             self.block_idx += BITS;
         }
         let t = self.bitset & (0_usize).wrapping_sub(self.bitset);
@@ -1463,7 +1466,7 @@ impl<'a> Iterator for Zeroes<'a> {
 }
 
 // Zeroes will stop returning Some when exhausted.
-impl<'a> FusedIterator for Zeroes<'a> {}
+impl<'a, I: FusedIterator<Item=usize>> FusedIterator for Zeroes<'a, I> {}
 
 impl Clone for FixedBitSet {
     #[inline]
