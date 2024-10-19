@@ -9,6 +9,7 @@ pub type OffsetBitSetOwned = OffsetBitSet<Vec<SimdBlock>>;
 pub type OffsetBitSetRef<'a> = OffsetBitSet<&'a [SimdBlock]>;
 pub type OffsetBitSetMut<'a> = OffsetBitSet<&'a mut [SimdBlock]>;
 
+#[derive(Debug, Clone)]
 pub struct OffsetBitSetCollection {
     /// Tracks the offset in [SimdBlock] counts into the `block` array.
     ///
@@ -18,10 +19,16 @@ pub struct OffsetBitSetCollection {
     blocks: Vec<SimdBlock>,
 }
 
-#[derive(Default)]
+#[derive(Default, Debug, Clone, Copy)]
 struct PseudoOffset {
     blocks_offset: u32,
     root_bitset_offset: u32,
+}
+
+impl Default for OffsetBitSetCollection {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl OffsetBitSetCollection {
