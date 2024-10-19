@@ -3,10 +3,10 @@ use crate::offset::iter::OverlapIter;
 
 pub trait BitSet: Sized {
     /// Return the internal SIMD blocks of the [BitSet]
-    fn as_simd_blocks(&self) -> &[SimdBlock];
+    fn as_simd_blocks(&self) -> impl ExactSizeIterator<Item=&SimdBlock> + DoubleEndedIterator;
 
     /// Return sub-block representations of the [SimdBlock]s
-    fn as_sub_blocks(&self) -> &[Block];
+    fn as_sub_blocks(&self) -> impl ExactSizeIterator<Item=&Block> + DoubleEndedIterator;
 
     /// Return the amount of bits allocated to this [BitSet]
     fn bit_len(&self) -> usize;
@@ -42,8 +42,8 @@ pub trait BitSet: Sized {
     fn overlap<'a>(
         &'a self,
         other: &'a impl BitSet,
-    ) -> OverlapIter<'a> {
-        OverlapIter::new(self, other)
+    ) -> OverlapIter<'a, impl Iterator<Item=(&'a SimdBlock, &'a SimdBlock)>> {
+        crate::iter::new_overlap(self, other)
     }
 
     /// An efficient way of checking whether `self` and `other` have any overlapping [SimdBlock]s
@@ -79,46 +79,49 @@ pub trait BitSet: Sized {
 }
 
 pub struct LazyApplication {
-    
+
 }
 
 #[inline]
-pub(crate) fn ones_impl(set: &impl BitSet) -> Ones {
-    match set.as_sub_blocks().split_first() {
-        Some((&first_block, rem)) => {
-            let (&last_block, rem) = rem.split_last().unwrap_or((&0, rem));
-            Ones {
-                bitset_front: first_block,
-                bitset_back: last_block,
-                block_idx_front: 0,
-                block_idx_back: (1 + rem.len()) * BITS,
-                remaining_blocks: rem.iter(),
-            }
+pub(crate) fn ones_impl(set: &impl BitSet) -> Ones<impl ExactSizeIterator<Item=&usize>> {
+    let mut itr = set.as_sub_blocks();
+    if let Some(&first_block) = itr.next() {
+        let last_block = *itr.next_back().unwrap_or(&0);
+        Ones {
+            bitset_front: first_block,
+            bitset_back: last_block,
+            block_idx_front: 0,
+            block_idx_back: (1 + itr.len()) * BITS,
+            remaining_blocks: itr,
+            _phantom: Default::default(),
         }
-        None => Ones {
+    } else {
+        Ones {
             bitset_front: 0,
             bitset_back: 0,
             block_idx_front: 0,
             block_idx_back: 0,
-            remaining_blocks: [].iter(),
-        },
+            remaining_blocks: itr,
+            _phantom: Default::default(),
+        }
     }
 }
 
 #[inline]
 pub(crate) fn zeroes_impl(set: &impl BitSet) -> Zeroes {
-    match set.as_sub_blocks().split_first() {
-        Some((&block, rem)) => Zeroes {
-            bitset: !block,
-            block_idx: 0,
-            len: set.bit_len(),
-            remaining_blocks: rem.iter(),
-        },
-        None => Zeroes {
-            bitset: !0,
-            block_idx: 0,
-            len: set.bit_len(),
-            remaining_blocks: [].iter(),
-        },
-    }
+    // match set.as_sub_blocks().split_first() {
+    //     Some((&block, rem)) => Zeroes {
+    //         bitset: !block,
+    //         block_idx: 0,
+    //         len: set.bit_len(),
+    //         remaining_blocks: rem.iter(),
+    //     },
+    //     None => Zeroes {
+    //         bitset: !0,
+    //         block_idx: 0,
+    //         len: set.bit_len(),
+    //         remaining_blocks: [].iter(),
+    //     },
+    // }
+    todo!()
 }

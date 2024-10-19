@@ -36,6 +36,7 @@ use core::fmt::{Binary, Display, Error, Formatter};
 use core::cmp::Ordering;
 use core::hash::Hash;
 use core::iter::{Chain, FusedIterator};
+use core::marker::PhantomData;
 use core::mem::ManuallyDrop;
 use core::mem::MaybeUninit;
 use core::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Index};
@@ -764,6 +765,7 @@ impl FixedBitSet {
                     block_idx_front: 0,
                     block_idx_back: (1 + rem.len()) * BITS,
                     remaining_blocks: rem.iter(),
+                    _phantom: Default::default(),
                 }
             }
             None => Ones {
@@ -772,6 +774,7 @@ impl FixedBitSet {
                 block_idx_front: 0,
                 block_idx_back: 0,
                 remaining_blocks: [].iter(),
+                _phantom: Default::default(),
             },
         }
     }
@@ -1021,13 +1024,13 @@ impl FixedBitSet {
 
 impl generic::BitSet for FixedBitSet {
     #[inline(always)]
-    fn as_simd_blocks(&self) -> &[SimdBlock] {
-        self.as_simd_slice()
+    fn as_simd_blocks(&self) -> impl ExactSizeIterator<Item=&SimdBlock> + DoubleEndedIterator {
+        self.as_simd_slice().iter()
     }
 
     #[inline(always)]
-    fn as_sub_blocks(&self) -> &[Block] {
-        self.as_slice()
+    fn as_sub_blocks(&self) -> impl ExactSizeIterator<Item=&Block> + DoubleEndedIterator {
+        self.as_slice().iter()
     }
 
     #[inline(always)]
@@ -1311,15 +1314,16 @@ impl ExactSizeIterator for Masks {}
 /// An  iterator producing the indices of the set bit in a set.
 ///
 /// This struct is created by the [`FixedBitSet::ones`] method.
-pub struct Ones<'a> {
+pub struct Ones<'a, I = core::slice::Iter<'a, usize> > {
     bitset_front: usize,
     bitset_back: usize,
     block_idx_front: usize,
     block_idx_back: usize,
-    remaining_blocks: core::slice::Iter<'a, usize>,
+    remaining_blocks: I,
+    _phantom: PhantomData<&'a ()>
 }
 
-impl<'a> Ones<'a> {
+impl<'a, I: Iterator<Item=&'a usize>> Ones<'a, I> {
     #[inline]
     pub fn last_positive_bit_and_unset(n: &mut usize) -> usize {
         // Find the last set bit using x & -x
@@ -1347,7 +1351,7 @@ impl<'a> Ones<'a> {
     }
 }
 
-impl<'a> DoubleEndedIterator for Ones<'a> {
+impl<'a, I: DoubleEndedIterator<Item=&'a usize>> DoubleEndedIterator for Ones<'a, I>{
     fn next_back(&mut self) -> Option<Self::Item> {
         while self.bitset_back == 0 {
             match self.remaining_blocks.next_back() {
@@ -1378,7 +1382,7 @@ impl<'a> DoubleEndedIterator for Ones<'a> {
     }
 }
 
-impl<'a> Iterator for Ones<'a> {
+impl<'a, I: Iterator<Item=&'a usize>> Iterator for Ones<'a, I> {
     type Item = usize; // the bit position of the '1'
 
     #[inline]
@@ -1419,7 +1423,7 @@ impl<'a> Iterator for Ones<'a> {
 }
 
 // Ones will continue to return None once it first returns None.
-impl<'a> FusedIterator for Ones<'a> {}
+impl<'a, I: FusedIterator<Item=&'a usize>> FusedIterator for Ones<'a, I> {}
 
 /// An  iterator producing the indices of the set bit in a set.
 ///

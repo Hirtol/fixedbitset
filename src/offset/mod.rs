@@ -232,7 +232,7 @@ impl<T: AsRef<[SimdBlock]>> OffsetBitSet<T> {
 
         let sblock_count = self.root_block_offset as usize * SimdBlock::USIZE_COUNT;
         let repeat = core::iter::repeat_n(0, sblock_count)
-            .chain(self.as_simd_blocks().iter().flat_map(|v| v.into_usize_array()))
+            .chain(self.as_simd_blocks().flat_map(|v| v.into_usize_array()))
             .chain(core::iter::repeat(0));
         FixedBitSet::with_capacity_and_blocks(bits, repeat)
     }
@@ -247,6 +247,22 @@ impl<T: AsRef<[SimdBlock]>> OffsetBitSet<T> {
     #[inline(always)]
     fn root_block_len(&self) -> usize {
         self.root_block_offset as usize + self.len()
+    }
+
+    #[inline(always)]
+    fn simd_blocks(&self) -> &[SimdBlock] {
+        self.blocks.as_ref()
+    }
+
+    #[inline(always)]
+    fn sub_blocks(&self) -> &[Block] {
+        // SAFETY: The representations of SimdBlock and Block are guaranteed to be interchangeable.
+        unsafe {
+            core::slice::from_raw_parts(
+                self.simd_blocks().as_ptr().cast(),
+                self.simd_blocks().len() * SimdBlock::USIZE_COUNT,
+            )
+        }
     }
 }
 
@@ -284,19 +300,13 @@ impl<'a> OffsetBitSet<&'a [SimdBlock]> {
 
 impl<T: AsRef<[SimdBlock]>> BitSet for OffsetBitSet<T> {
     #[inline(always)]
-    fn as_simd_blocks(&self) -> &[SimdBlock] {
-        self.blocks.as_ref()
+    fn as_simd_blocks(&self) -> impl ExactSizeIterator<Item=&SimdBlock> + DoubleEndedIterator {
+        self.simd_blocks().into_iter()
     }
 
     #[inline(always)]
-    fn as_sub_blocks(&self) -> &[Block] {
-        // SAFETY: The representations of SimdBlock and Block are guaranteed to be interchangeable.
-        unsafe {
-            core::slice::from_raw_parts(
-                self.as_simd_blocks().as_ptr().cast(),
-                self.as_simd_blocks().len() * SimdBlock::USIZE_COUNT,
-            )
-        }
+    fn as_sub_blocks(&self) -> impl ExactSizeIterator<Item=&Block> + DoubleEndedIterator {
+       self.sub_blocks().into_iter()
     }
 
     #[inline(always)]
@@ -396,7 +406,7 @@ mod tests {
 
         let index = base_collection.push_collection(&[3, 128, 129, 256]);
         let other_new = base_collection.push_collection(&[3, 256]);
-        
+
         let other_new = base_collection.get_set_ref(other_new);
         let set = base_collection.get_set_ref(index);
         assert!(other_new.is_subset(&set));
