@@ -46,13 +46,25 @@ impl OffsetBitSetCollection {
     /// # Returns
     /// The index to access the new [OffsetBitSet]
     pub fn push_collection(&mut self, bits: &[usize]) -> usize {
-        assert!(!bits.is_empty(), "Need a non-empty set");
-        let root_block_offset = bits[0] / SimdBlock::BITS;
+        self.push_collection_itr(bits.iter().copied())
+    }
+
+    /// Push a _sorted_ collection of bits which are expected to be enabled as a new [OffsetBitSet].
+    ///
+    /// A base offset will automatically be inferred based on the first item in the list
+    ///
+    /// # Returns
+    /// The index to access the new [OffsetBitSet]
+    pub fn push_collection_itr(&mut self, mut bits: impl ExactSizeIterator<Item=usize>) -> usize {
+        let Some(first_item) = bits.next() else {
+            panic!("Need a non-empty set");
+        } ;
+        let root_block_offset = first_item / SimdBlock::BITS;
 
         let blocks_offset = self.blocks.len();
         let mut current_block_index = root_block_offset;
         let mut current_block = [0; SimdBlock::USIZE_COUNT];
-        for &bit in bits {
+        for bit in core::iter::once(first_item).chain(bits) {
             let (sub_block, remaining) = crate::div_rem(bit, crate::BITS);
             let block_index = sub_block / SimdBlock::USIZE_COUNT;
 
