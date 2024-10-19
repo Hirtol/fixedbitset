@@ -1,9 +1,10 @@
 use crate::offset::iter::OverlapIter;
 use crate::SimdBlock;
-use crate::{Block, FixedBitSet, IndexRange, Ones, BITS};
+use crate::{Block, FixedBitSet, IndexRange};
 use alloc::vec::Vec;
+use crate::generic::BitSet;
 
-mod iter;
+pub mod iter;
 
 pub type OffsetBitSetOwned = OffsetBitSet<Vec<SimdBlock>>;
 pub type OffsetBitSetRef<'a> = OffsetBitSet<&'a [SimdBlock]>;
@@ -14,8 +15,8 @@ pub struct OffsetBitSetCollection {
     ///
     /// # Invariant
     /// There is always a last PseudoOffset to mark the end of the array
-    pub offsets: Vec<PseudoOffset>,
-    pub blocks: Vec<SimdBlock>,
+    offsets: Vec<PseudoOffset>,
+    blocks: Vec<SimdBlock>,
 }
 
 #[derive(Default)]
@@ -224,93 +225,24 @@ pub struct OffsetBitSet<T> {
 }
 
 impl<T: AsRef<[SimdBlock]>> OffsetBitSet<T> {
-    #[inline]
-    pub fn ones(&self) -> Ones {
-        match self.sub_blocks().split_first() {
-            Some((&first_block, rem)) => {
-                let (&last_block, rem) = rem.split_last().unwrap_or((&0, rem));
-                Ones {
-                    bitset_front: first_block,
-                    bitset_back: last_block,
-                    block_idx_front: 0,
-                    block_idx_back: (1 + rem.len()) * BITS,
-                    remaining_blocks: rem.iter(),
-                }
-            }
-            None => Ones {
-                bitset_front: 0,
-                bitset_back: 0,
-                block_idx_front: 0,
-                block_idx_back: 0,
-                remaining_blocks: [].iter(),
-            },
-        }
-    }
-
-    /// Check whether `self ⊆ other`, aka, if all bits present in self are present in other
-    #[inline]
-    pub fn is_subset<Q: AsRef<[SimdBlock]>>(&self, other: &OffsetBitSet<Q>) -> bool {
-        // Can't possibly be a subset if the root index is greater!
-        if self.root_block_len() > other.root_block_len() {
-            return false;
-        }
-        
-        self.overlap(other)
-            .map(|mut itr| itr.all(|(x, y)| (*x & *y) == *x))
-            .unwrap_or(false)
-    }
-
-    /// Yield all [SimdBlock]s which overlap between the two given sets
-    #[inline(always)]
-    pub fn overlap<'a, Q: AsRef<[SimdBlock]>>(
-        &'a self,
-        other: &'a OffsetBitSet<Q>,
-    ) -> Option<OverlapIter<'a>> {
-        OverlapIter::new(self, other)
-    }
-
-    /// An efficient way of checking whether `self` and `other` have any overlapping [SimdBlock]s
-    pub fn has_overlap<Q: AsRef<[SimdBlock]>>(&self, other: &OffsetBitSet<Q>) -> bool {
-        let self_start = self.root_block_offset as usize;
-        let other_start = other.root_block_offset as usize;
-
-        // Check if there is an overlap between the two ranges
-        !(self.root_block_len() <= other_start || other.root_block_len() <= self_start)
-    }
-
     pub fn as_fixed_bit_set(&self, bits: usize) -> FixedBitSet {
         let bits_to_start = self.root_block_offset as usize * SimdBlock::BITS;
-        let total_bits = bits_to_start + self.simd_blocks().len() * SimdBlock::BITS;
+        let total_bits = bits_to_start + self.as_simd_blocks().len() * SimdBlock::BITS;
         assert!(total_bits < bits, "Creating a FixedBitSet out of an OffsetBitSet requires the total `bits` ({bits}) count to be larger than the OffsetBitSet's size ({total_bits})");
 
         let sblock_count = self.root_block_offset as usize * SimdBlock::USIZE_COUNT;
         let repeat = core::iter::repeat_n(0, sblock_count)
-            .chain(self.simd_blocks().iter().flat_map(|v| v.into_usize_array()))
+            .chain(self.as_simd_blocks().iter().flat_map(|v| v.into_usize_array()))
             .chain(core::iter::repeat(0));
         FixedBitSet::with_capacity_and_blocks(bits, repeat)
     }
 
-    #[inline(always)]
-    fn simd_blocks(&self) -> &[SimdBlock] {
-        self.blocks.as_ref()
-    }
-
-    #[inline(always)]
-    fn sub_blocks(&self) -> &[Block] {
-        // SAFETY: The representations of SimdBlock and Block are guaranteed to be interchangeable.
-        unsafe {
-            core::slice::from_raw_parts(
-                self.simd_blocks().as_ptr().cast(),
-                self.simd_blocks().len() * SimdBlock::USIZE_COUNT,
-            )
-        }
-    }
-
+    /// Return the amount of [SimdBlock]s
     #[inline(always)]
     fn len(&self) -> usize {
-        self.simd_blocks().len()
+        self.as_simd_blocks().len()
     }
-    
+
     /// Return the length of the OffsetBitSet if it was instead a full [FixedBitSet]
     #[inline(always)]
     fn root_block_len(&self) -> usize {
@@ -350,19 +282,53 @@ impl<'a> OffsetBitSet<&'a [SimdBlock]> {
     }
 }
 
+impl<T: AsRef<[SimdBlock]>> BitSet for OffsetBitSet<T> {
+    #[inline(always)]
+    fn as_simd_blocks(&self) -> &[SimdBlock] {
+        self.blocks.as_ref()
+    }
+
+    #[inline(always)]
+    fn as_sub_blocks(&self) -> &[Block] {
+        // SAFETY: The representations of SimdBlock and Block are guaranteed to be interchangeable.
+        unsafe {
+            core::slice::from_raw_parts(
+                self.as_simd_blocks().as_ptr().cast(),
+                self.as_simd_blocks().len() * SimdBlock::USIZE_COUNT,
+            )
+        }
+    }
+
+    #[inline(always)]
+    fn bit_len(&self) -> usize {
+        self.as_simd_blocks().len() * SimdBlock::BITS
+    }
+
+    #[inline(always)]
+    fn root_block_offset(&self) -> usize {
+        self.root_block_offset as usize
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::offset::{OffsetBitSet, OffsetBitSetCollection};
+    use alloc::vec::Vec;
+    use crate::generic::BitSet;
+    use crate::offset::{OffsetBitSetCollection};
 
     #[test]
     pub fn test_push_offset_set() {
         let mut base_collection = OffsetBitSetCollection::new();
 
         let index = base_collection.push_collection(&[100, 127, 256]);
+        let other_idx = base_collection.push_collection(&[256]);
 
         let set = base_collection.get_set_ref(index);
         assert_eq!(set.blocks.len(), 3);
         assert_eq!(set.ones().collect::<Vec<_>>(), vec![100, 127, 256]);
+
+        let other = base_collection.get_set_ref(other_idx);
+        assert_eq!(other.ones().collect::<Vec<_>>(), vec![256]);
 
         let testing_set = set.as_fixed_bit_set(400);
         assert!(testing_set.contains(100));
@@ -390,13 +356,25 @@ mod tests {
         let mut base_collection = OffsetBitSetCollection::new();
 
         // Safety: The vec is guaranteed to be aligned.
-        let index = base_collection.push_collection(&[128, 129, 256]);
+        let index = base_collection.push_collection(&[3, 128, 129, 256]);
         let other = base_collection.push_collection(&[129, 256]);
 
         let set = base_collection.get_set_ref(index);
         let other = base_collection.get_set_ref(other);
+
         assert!(set.has_overlap(&other));
-        assert!(other.is_subset(&set));
+        let overlap = set.overlap(&other).collect::<Vec<_>>();
+        assert_eq!(overlap.len(), 2);
+        println!("Overlap: {overlap:?}");
+
+        let other_new = base_collection.push_collection(&[256]);
+        let other_new = base_collection.get_set_ref(other_new);
+
+        let set = base_collection.get_set_ref(index);
+        let overlap = set.overlap(&other_new).collect::<Vec<_>>();
+        println!("Overlap: {overlap:?}");
+
+        assert_eq!(overlap.len(), 1);
     }
 
     #[test]
@@ -406,15 +384,21 @@ mod tests {
         // Safety: The vec is guaranteed to be aligned.
         let index = base_collection.push_collection(&[128, 129, 256]);
         let other = base_collection.push_collection(&[129, 256]);
-        
+
         let set = base_collection.get_set_ref(index);
         let other = base_collection.get_set_ref(other);
-
         assert!(other.is_subset(&set));
-        
+
         let mut fixed = set.as_fixed_bit_set(400);
+        assert!(other.is_subset(&fixed));
         fixed.remove(129);
+        assert!(!other.is_subset(&fixed));
+
+        let index = base_collection.push_collection(&[3, 128, 129, 256]);
+        let other_new = base_collection.push_collection(&[3, 256]);
         
-        assert!(!other.is_subset(&OffsetBitSet::from_fixed_set(.., &fixed)))
+        let other_new = base_collection.get_set_ref(other_new);
+        let set = base_collection.get_set_ref(index);
+        assert!(other_new.is_subset(&set));
     }
 }

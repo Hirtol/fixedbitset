@@ -23,6 +23,7 @@ pub mod block;
 mod range;
 
 pub mod offset;
+pub mod generic;
 
 #[cfg(feature = "serde")]
 extern crate serde;
@@ -40,6 +41,7 @@ use core::mem::MaybeUninit;
 use core::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Index};
 use core::ptr::NonNull;
 pub use range::IndexRange;
+pub use offset::*;
 
 pub(crate) const BITS: usize = core::mem::size_of::<Block>() * 8;
 #[cfg(feature = "serde")]
@@ -1014,6 +1016,28 @@ impl FixedBitSet {
     /// at least all the values in `other`.
     pub fn is_superset(&self, other: &FixedBitSet) -> bool {
         other.is_subset(self)
+    }
+}
+
+impl generic::BitSet for FixedBitSet {
+    #[inline(always)]
+    fn as_simd_blocks(&self) -> &[SimdBlock] {
+        self.as_simd_slice()
+    }
+
+    #[inline(always)]
+    fn as_sub_blocks(&self) -> &[Block] {
+        self.as_slice()
+    }
+
+    #[inline(always)]
+    fn bit_len(&self) -> usize {
+        self.len()
+    }
+
+    #[inline(always)]
+    fn root_block_offset(&self) -> usize {
+        0
     }
 }
 
