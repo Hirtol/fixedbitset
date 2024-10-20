@@ -6,12 +6,10 @@ use crate::{Block, SimdBlock};
 #[derive(Debug)]
 pub struct OverlapIter<'a, I> {
     itr: I,
-    overlap_len: usize,
-    current: usize,
     _phantom: PhantomData<&'a ()>
 }
 
-pub fn new_overlap<'a>(self_bitset: &'a impl BitSet, other_bitset: &'a impl BitSet) -> OverlapIter<'a, impl DoubleEndedIterator<Item=(SimdBlock, SimdBlock)> + ExactSizeIterator + 'a> {
+pub fn new_overlap_simd<'a>(self_bitset: &'a impl BitSet, other_bitset: &'a impl BitSet) -> OverlapIter<'a, impl DoubleEndedIterator<Item=(SimdBlock, SimdBlock)> + ExactSizeIterator + 'a> {
     let self_start = self_bitset.root_block_offset();
     let other_start = other_bitset.root_block_offset();
 
@@ -27,8 +25,26 @@ pub fn new_overlap<'a>(self_bitset: &'a impl BitSet, other_bitset: &'a impl BitS
 
     OverlapIter {
         itr,
-        overlap_len,
-        current: 0,
+        _phantom: Default::default(),
+    }
+}
+
+pub fn new_overlap_sub_blocks<'a>(self_bitset: &'a impl BitSet, other_bitset: &'a impl BitSet) -> OverlapIter<'a, impl DoubleEndedIterator<Item=(Block, Block)> + ExactSizeIterator + 'a> {
+    let self_start = self_bitset.root_block_offset() * SimdBlock::USIZE_COUNT;
+    let other_start = other_bitset.root_block_offset() * SimdBlock::USIZE_COUNT;
+
+    let overlap_start = self_start.max(other_start);
+    let overlap_end = self_bitset.root_block_len().min(other_bitset.root_block_len()) * SimdBlock::USIZE_COUNT;
+
+    let self_offset = overlap_start - self_start;
+    let other_offset = overlap_start - other_start;
+    let overlap_len = overlap_end.saturating_sub(overlap_start);
+    // No need to `.take()` on `other_bitset` as our previous slice takes care of that.
+    let itr = self_bitset.as_sub_blocks().skip(self_offset).take(overlap_len)
+        .zip(other_bitset.as_sub_blocks().skip(other_offset));
+
+    OverlapIter {
+        itr,
         _phantom: Default::default(),
     }
 }
@@ -41,40 +57,43 @@ pub fn overlap_start(left: &impl BitSet, right: &impl BitSet) -> usize {
     self_start.max(other_start)
 }
 
-impl<'a, I: Iterator<Item=(SimdBlock, SimdBlock)>> Iterator for OverlapIter<'a, I> {
-    type Item = (SimdBlock, SimdBlock);
+impl<'a, T, I: Iterator<Item=(T, T)>> Iterator for OverlapIter<'a, I> {
+    type Item = (T, T);
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        self.current += 1;
         self.itr.next()
     }
 
     #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let remaining = self.overlap_len - self.current;
-        (remaining, Some(remaining))
+        self.itr.size_hint()
     }
 }
 
-impl<'a, I: Iterator<Item=(SimdBlock, SimdBlock)>> ExactSizeIterator for OverlapIter<'a, I> {
+impl<'a, T, I: ExactSizeIterator<Item=(T, T)>> ExactSizeIterator for OverlapIter<'a, I> {
     #[inline]
     fn len(&self) -> usize {
-        self.overlap_len - self.current
+        self.itr.len()
     }
 }
 
-impl<'a, I> DoubleEndedIterator for OverlapIter<'a, I>
+impl<'a, T, I> DoubleEndedIterator for OverlapIter<'a, I>
 where
-    I: DoubleEndedIterator + Iterator<Item=(SimdBlock, SimdBlock)>,
+    I: DoubleEndedIterator + Iterator<Item=(T, T)>,
 {
     #[inline]
     fn next_back(&mut self) -> Option<Self::Item> {
         self.itr.next_back()
     }
+
+    #[inline]
+    fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
+        self.itr.nth_back(n)
+    }
 }
 
-impl<'a, I: FusedIterator<Item=(SimdBlock, SimdBlock)>> FusedIterator for OverlapIter<'a, I> {}
+impl<'a, T, I: FusedIterator<Item=(T, T)>> FusedIterator for OverlapIter<'a, I> {}
 
 pub struct SimdToSubIter<I> {
     current_idx: usize,
@@ -116,7 +135,7 @@ impl<I: Iterator<Item=SimdBlock>> Iterator for SimdToSubIter<I> {
                 Some(out)
             },
             (_, Some(block)) => {
-                let out = block[self.last_idx];
+                let out = block[(SimdBlock::USIZE_COUNT - 1) - self.last_idx];
                 let (next_value, overflow) = self.last_idx.overflowing_sub(1);
                 if overflow {
                     // We know that there is nothing else, otherwise `current_block` would've been true
@@ -134,6 +153,7 @@ impl<I: Iterator<Item=SimdBlock>> Iterator for SimdToSubIter<I> {
         }
     }
 
+    #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
         let (left, right) = self.itr.size_hint();
         
@@ -159,7 +179,7 @@ impl<I: DoubleEndedIterator<Item=SimdBlock>> DoubleEndedIterator for SimdToSubIt
                 Some(out)
             },
             (Some(block), _) => {
-                let out = block[self.current_idx];
+                let out = block[SimdBlock::USIZE_COUNT - 1 - self.current_idx];
                 self.current_idx += 1;
 
                 if self.current_idx >= SimdBlock::USIZE_COUNT {

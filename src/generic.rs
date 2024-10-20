@@ -45,7 +45,7 @@ pub trait BitSet: Sized {
         &'a self,
         other: &'a impl BitSet,
     ) -> OverlapIter<'a, impl DoubleEndedIterator<Item=(SimdBlock, SimdBlock)> + ExactSizeIterator> {
-        crate::iter::new_overlap(self, other)
+        crate::iter::new_overlap_simd(self, other)
     }
 
     /// An efficient way of checking whether `self` and `other` have any overlapping [SimdBlock]s
@@ -154,7 +154,8 @@ impl<'a, A: BitSet, B: BitSet> BitSet for LazyAnd<'a, A, B> {
 
     #[inline(always)]
     fn as_sub_blocks(&self) -> impl ExactSizeIterator<Item=Block> + DoubleEndedIterator {
-        SimdToSubIter::new(self.as_simd_blocks())
+        crate::iter::new_overlap_sub_blocks(&self.left, &self.right)
+            .map(|(x, y)| x & y)
     }
 
     #[inline(always)]
@@ -223,14 +224,13 @@ mod tests {
     #[test]
     pub fn test_lazy_and() {
         let mut base_collection = OffsetBitSetCollection::new();
-
-        // Safety: The vec is guaranteed to be aligned.
+        
         let left_idx = base_collection.push_collection(&[128, 129, 256]);
         let right_idx = base_collection.push_collection(&[129, 256]);
-
+        
         let left = base_collection.get_set_ref(left_idx);
         let right = base_collection.get_set_ref(right_idx);
-
+        
         let combined = LazyAnd {
             left: &left,
             right: &right,
