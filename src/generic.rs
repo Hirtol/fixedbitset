@@ -1,3 +1,4 @@
+use core::marker::PhantomData;
 use crate::{Block, FixedBitSet, Ones, SimdBlock, Zeroes, BITS};
 use crate::iter::SimdToSubIter;
 use crate::offset::iter::OverlapIter;
@@ -77,22 +78,35 @@ pub trait BitSet: Sized {
     fn root_block_len(&self) -> usize {
         self.root_block_offset() + self.as_simd_blocks().len()
     }
-    
+
     /// Create a new lazy bitset which will only perform the `AND` when needed.
-    /// 
+    ///
     /// Note that the result is not cached, so it would be repeated every invocation!
     #[inline(always)]
-    fn lazy_and<'a, T: BitSet>(&'a self, other: &'a T) -> LazyAnd<'a, Self, T> {
+    fn lazy_and<T: BitSet>(&self, other: T) -> LazyAnd<&Self, T> {
         LazyAnd {
             left: self,
             right: other,
+            _phantom: Default::default(),
+        }
+    }
+
+    /// Create a new lazy bitset which will only perform the `AND` when needed.
+    ///
+    /// Note that the result is not cached, so it would be repeated every invocation!
+    #[inline(always)]
+    fn to_lazy_and<'a, T: BitSet>(self, other: T) -> LazyAnd<'a, Self, T> {
+        LazyAnd {
+            left: self,
+            right: other,
+            _phantom: Default::default(),
         }
     }
 
     /// Turn this [BitSet] into a [FixedBitSet] with the given capacity.
-    /// 
+    ///
     /// # Panic
-    /// 
+    ///
     /// Will panic if the number of bits is too small too hold the values of the current set.
     fn as_fixed_bit_set(&self, bits: usize) -> FixedBitSet {
         let bits_to_start = self.root_block_offset() * SimdBlock::BITS;
@@ -107,15 +121,34 @@ pub trait BitSet: Sized {
     }
 }
 
+impl<'a, T: BitSet> BitSet for &'a T {
+    fn as_simd_blocks(&self) -> impl ExactSizeIterator<Item=SimdBlock> + DoubleEndedIterator {
+        (**self).as_simd_blocks()
+    }
+
+    fn as_sub_blocks(&self) -> impl ExactSizeIterator<Item=Block> + DoubleEndedIterator {
+        (**self).as_sub_blocks()
+    }
+
+    fn bit_len(&self) -> usize {
+        (**self).bit_len()
+    }
+
+    fn root_block_offset(&self) -> usize {
+        (**self).root_block_offset()
+    }
+}
+
 pub struct LazyAnd<'a, A, B> {
-    left: &'a A,
-    right: &'a B,
+    left: A,
+    right: B,
+    _phantom: PhantomData<&'a ()>
 }
 
 impl<'a, A: BitSet, B: BitSet> BitSet for LazyAnd<'a, A, B> {
     #[inline]
     fn as_simd_blocks(&self) -> impl ExactSizeIterator<Item=SimdBlock> + DoubleEndedIterator {
-        self.left.overlap(self.right)
+        self.left.overlap(&self.right)
             .map(|(x, y)| x & y)
     }
 
@@ -131,7 +164,7 @@ impl<'a, A: BitSet, B: BitSet> BitSet for LazyAnd<'a, A, B> {
 
     #[inline(always)]
     fn root_block_offset(&self) -> usize {
-        crate::iter::overlap_start(self.left, self.right)
+        crate::iter::overlap_start(&self.left, &self.right)
     }
 }
 
@@ -201,6 +234,7 @@ mod tests {
         let combined = LazyAnd {
             left: &left,
             right: &right,
+            _phantom: Default::default(),
         };
 
         let out = combined.ones().collect::<Vec<_>>();
