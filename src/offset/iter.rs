@@ -121,6 +121,8 @@ where
 
 impl<'a, T, I: FusedIterator<Item = (T, T)>> FusedIterator for OverlapIter<'a, I> {}
 
+// ** SIMD TO SUB **
+
 pub struct SimdToSubIter<I> {
     current_idx: usize,
     current_block: Option<[usize; SimdBlock::USIZE_COUNT]>,

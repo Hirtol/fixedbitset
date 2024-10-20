@@ -4,6 +4,7 @@ use crate::{Block, FixedBitSet, IndexRange};
 use alloc::vec::Vec;
 
 pub mod iter;
+pub mod sparse;
 
 pub type OffsetBitSetOwned = OffsetBitSet<Vec<SimdBlock>>;
 pub type OffsetBitSetRef<'a> = OffsetBitSet<&'a [SimdBlock]>;
@@ -251,7 +252,7 @@ impl<T: AsRef<[SimdBlock]>> OffsetBitSet<T> {
             blocks: self.blocks.as_ref(),
         }
     }
-    
+
     /// Return an independent, owned, [OffsetBitSet]
     pub fn to_owned(&self) -> OffsetBitSetOwned {
         OffsetBitSetOwned {
