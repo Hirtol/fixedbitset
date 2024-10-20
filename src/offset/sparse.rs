@@ -1,7 +1,8 @@
 use crate::generic::BitSet;
 use crate::SimdBlock;
-use crate::{Block, OffsetBitSetMut, OffsetBitSetRef};
+use crate::{Block, OffsetBitSetRef};
 use alloc::vec::Vec;
+use core::iter::FlatMap;
 
 type SubOffsetIdx = u32;
 // pub type SparseBitSetOwned = SparseBitSet<'a, Vec<SimdBlock>>;
@@ -129,7 +130,7 @@ impl SparseBitSetCollection {
             .expect("Impossible invariant violation");
         *new_entry = sub_offset_idx as u32;
         // Maintain the invariant
-        self.offsets.push(self.sub_offsets.len() as u32);
+        self.offsets.push(self.sub_offsets.len() as u32 - 1);
 
         self.len() - 1
     }
@@ -158,7 +159,7 @@ impl SparseBitSetCollection {
     #[inline]
     pub unsafe fn get_s_set_ref_unchecked(&self, bit_set: usize) -> SparseBitSetRef<'_> {
         let offset = *self.offsets.get_unchecked(bit_set);
-        let next_offset = *self.offsets.get_unchecked(bit_set + 1);
+        let next_offset = *self.offsets.get_unchecked(bit_set + 1) + 1;
 
         SparseBitSetRef {
             bitsets: SparseOffsets {
@@ -166,12 +167,6 @@ impl SparseBitSetCollection {
             },
             blocks: &self.blocks,
         }
-        // crate::OffsetBitSet {
-        //     root_block_offset: offset.root_bitset_offset,
-        //     blocks: self
-        //         .blocks
-        //         .get_unchecked(offset.blocks_offset as usize..next_offset.blocks_offset as usize),
-        // }
     }
 }
 
@@ -210,16 +205,18 @@ impl<'a, T: AsRef<[SimdBlock]>> SparseBitSet<'a, T> {
         // Last item is to mark the end of the block list
         self.bitsets.offsets.len() - 1
     }
-    
+
+    #[inline]
     fn bit_sets(&'a self) -> impl ExactSizeIterator<Item=OffsetBitSetRef<'a>> + DoubleEndedIterator + 'a {
         (0..self.bit_sets_len()).map(move |i| unsafe {self.get_set_ref_unchecked(i) })
     }
-
-    // fn to_bit_sets<'a>(&self) -> impl ExactSizeIterator<Item=OffsetBitSetRef<'a>> + DoubleEndedIterator + 'a {
-    //     self.bitsets.offsets().map(|offset| {
-    //
-    //     })
-    // }
+    
+    #[inline]
+    fn get_last_set(&self) -> OffsetBitSetRef<'_> {
+        unsafe {
+            self.get_set_ref_unchecked(self.bit_sets_len() - 1)
+        }
+    }
 
     #[inline]
     unsafe fn get_set_ref_unchecked(&self, bit_set: usize) -> OffsetBitSetRef<'_> {
@@ -255,9 +252,106 @@ impl<'a, T: AsRef<[SimdBlock]>> SparseBitSet<'a, T> {
     }
 }
 
+struct ExactSizeFlatten<I, U: IntoIterator, F> {
+    inner: FlatMap<I, U, F>,
+    len: usize,
+    consumed: usize,
+}
+
+impl<I, U: IntoIterator, F> ExactSizeFlatten<I, U, F> {
+    pub fn new(expected_len: usize, flatten: FlatMap<I, U, F>) -> Self {
+        Self {
+            inner: flatten,
+            len: expected_len,
+            consumed: 0,
+        }
+    }
+}
+
+impl<I: Iterator, U: IntoIterator, F> Iterator for ExactSizeFlatten<I, U, F>
+where
+    F: FnMut(I::Item) -> U,
+{
+    type Item = U::Item;
+
+    #[inline]
+    fn next(&mut self) -> Option<U::Item> {
+        self.consumed += 1;
+        self.inner.next()
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.len(), Some(self.len()))
+    }
+
+    #[inline]
+    fn fold<Acc, Fold>(self, init: Acc, fold: Fold) -> Acc
+    where
+        Fold: FnMut(Acc, Self::Item) -> Acc,
+    {
+        self.inner.fold(init, fold)
+    }
+
+    #[inline]
+    fn count(self) -> usize {
+        self.inner.count()
+    }
+
+    #[inline]
+    fn last(self) -> Option<Self::Item> {
+        self.inner.last()
+    }
+}
+
+impl<I: DoubleEndedIterator, U, F> DoubleEndedIterator for ExactSizeFlatten<I, U, F>
+where
+    F: FnMut(I::Item) -> U,
+    U: IntoIterator<IntoIter: DoubleEndedIterator>,
+{
+    #[inline]
+    fn next_back(&mut self) -> Option<U::Item> {
+        self.consumed += 1;
+        self.inner.next_back()
+    }
+    #[inline]
+    fn rfold<Acc, Fold>(self, init: Acc, fold: Fold) -> Acc
+    where
+        Fold: FnMut(Acc, Self::Item) -> Acc,
+    {
+        self.inner.rfold(init, fold)
+    }
+}
+
+impl<I, U, F> core::iter::FusedIterator for ExactSizeFlatten<I, U, F>
+where
+    I: core::iter::FusedIterator,
+    U: IntoIterator,
+    F: FnMut(I::Item) -> U,
+{
+}
+
+impl<I: Iterator, U, F> ExactSizeIterator for ExactSizeFlatten<I, U, F>
+where
+    F: FnMut(I::Item) -> U,
+    U: IntoIterator,
+{
+    fn len(&self) -> usize {
+        self.len.saturating_sub(self.consumed)
+    }
+}
+
 impl<'a, T: AsRef<[SimdBlock]>> BitSet for SparseBitSet<'a, T> {
     fn as_simd_blocks(&self) -> impl ExactSizeIterator<Item = SimdBlock> + DoubleEndedIterator {
-        self.simd_blocks().iter().copied()
+        let mut recent_root_offset = self.root_block_offset();
+        let last_set = self.get_last_set();
+        let final_len = last_set.root_block_offset as usize - recent_root_offset + last_set.blocks.len();
+        
+        ExactSizeFlatten::new(final_len, self.bit_sets().flat_map(move |b| {
+            let to_pad = b.root_block_offset as usize - recent_root_offset;
+            recent_root_offset = b.root_block_offset as usize;
+            core::iter::repeat_n(SimdBlock::NONE, to_pad).chain(b.blocks.iter().copied())
+        }))
     }
 
     fn as_sub_blocks(&self) -> impl ExactSizeIterator<Item = Block> + DoubleEndedIterator {
@@ -274,134 +368,156 @@ impl<'a, T: AsRef<[SimdBlock]>> BitSet for SparseBitSet<'a, T> {
     }
 }
 
-mod itr {
-    use core::marker::PhantomData;
-    use crate::generic::BitSet;
-    use crate::SimdBlock;
-    use crate::Block;
-    use crate::sparse::SparseBitSetRef;
-
-    #[derive(Debug)]
-    pub struct SparseOverlapIter<'a, I> {
-        itr: I,
-        _phantom: PhantomData<&'a ()>,
-    }
-    
-    pub fn new_overlap_simd<'a>(
-        left: &'a SparseBitSetRef<'a>,
-        right: &'a impl BitSet,
-    ) -> SparseOverlapIter<'a, impl DoubleEndedIterator<Item = (SimdBlock, SimdBlock)> + ExactSizeIterator + 'a>
-    {
-        let overlap = calculate_overlap(left, right);
-        // No need to `.take()` on `other_bitset` as our previous slice takes care of that.
-        let itr = left
-            .as_simd_blocks()
-            .skip(overlap.left_offset)
-            .take(overlap.overlap_len)
-            .zip(right.as_simd_blocks().skip(overlap.right_offset));
-    
-        SparseOverlapIter {
-            itr,
-            _phantom: Default::default(),
-        }
-    }
-    
-    pub fn new_overlap_sub_blocks<'a>(
-        left: &'a impl BitSet,
-        right: &'a impl BitSet,
-    ) -> SparseOverlapIter<'a, impl DoubleEndedIterator<Item = (Block, Block)> + ExactSizeIterator + 'a> {
-        let overlap = calculate_overlap(left, right);
-        // No need to `.take()` on `other_bitset` as our previous slice takes care of that.
-        let itr = left
-            .as_sub_blocks()
-            .skip(overlap.left_offset * SimdBlock::USIZE_COUNT)
-            .take(overlap.overlap_len * SimdBlock::USIZE_COUNT)
-            .zip(right.as_sub_blocks().skip(overlap.right_offset * SimdBlock::USIZE_COUNT));
-    
-        SparseOverlapIter {
-            itr,
-            _phantom: Default::default(),
-        }
-    }
-    
-    pub struct OverlapState {
-        pub left_offset: usize,
-        pub right_offset: usize,
-        pub overlap_start: usize,
-        pub overlap_len: usize,
-    }
-    
-    #[inline]
-    pub fn calculate_overlap(left: &impl BitSet, right: &impl BitSet) -> OverlapState {
-        let self_start = left.root_block_offset();
-        let other_start = right.root_block_offset();
-    
-        let overlap_start = self_start.max(other_start);
-        let overlap_end = left
-            .root_block_len()
-            .min(right.root_block_len());
-    
-        let left_offset = overlap_start - self_start;
-        let right_offset = overlap_start - other_start;
-        let overlap_len = overlap_end.saturating_sub(overlap_start);
-        
-        OverlapState {
-            left_offset,
-            right_offset,
-            overlap_start,
-            overlap_len,
-        }
-    }
-    
-    #[inline]
-    pub fn overlap_start(left: &impl BitSet, right: &impl BitSet) -> usize {
-        let self_start = left.root_block_offset();
-        let other_start = right.root_block_offset();
-    
-        self_start.max(other_start)
-    }
-    
-    impl<'a, T, I: Iterator<Item = (T, T)>> Iterator for SparseOverlapIter<'a, I> {
-        type Item = (T, T);
-    
-        #[inline]
-        fn next(&mut self) -> Option<Self::Item> {
-            self.itr.next()
-        }
-    
-        #[inline]
-        fn size_hint(&self) -> (usize, Option<usize>) {
-            self.itr.size_hint()
-        }
-    }
-    
-    impl<'a, T, I: ExactSizeIterator<Item = (T, T)>> ExactSizeIterator for SparseOverlapIter<'a, I> {
-        #[inline]
-        fn len(&self) -> usize {
-            self.itr.len()
-        }
-    }
-    
-    impl<'a, T, I> DoubleEndedIterator for SparseOverlapIter<'a, I>
-    where
-        I: DoubleEndedIterator + Iterator<Item = (T, T)>,
-    {
-        #[inline]
-        fn next_back(&mut self) -> Option<Self::Item> {
-            self.itr.next_back()
-        }
-    
-        #[inline]
-        fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
-            self.itr.nth_back(n)
-        }
-    }
-    
-    impl<'a, T, I: FusedIterator<Item = (T, T)>> FusedIterator for SparseOverlapIter<'a, I> {}
-}
+// mod itr {
+//     use core::marker::PhantomData;
+//     use crate::generic::BitSet;
+//     use crate::SimdBlock;
+//     use crate::Block;
+//     use crate::sparse::SparseBitSetRef;
+// 
+//     #[derive(Debug)]
+//     pub struct SparseOverlapIter<'a, I> {
+//         sparse: &'a SparseBitSetRef<'a>,
+//         current_bitset: u32,
+//         current_root_block_offset: u32,
+//         current_block_idx: u32,
+//         overlap_state: Option<OverlapState>,
+//         itr: I,
+//         _phantom: PhantomData<&'a ()>,
+//     }
+//     
+//     pub fn new_overlap_simd<'a>(
+//         left: &'a SparseBitSetRef<'a>,
+//         right: &'a impl BitSet,
+//     ) -> SparseOverlapIter<'a, impl DoubleEndedIterator<Item = (SimdBlock, SimdBlock)> + ExactSizeIterator + 'a>
+//     {
+//         let first_overlap = left.bit_sets().enumerate()
+//             .map(|(idx, off)| (idx, calculate_overlap(&off, right)))
+//             .filter(|(_, overlap)| overlap.is_valid()).next();
+//         
+//         // No need to `.take()` on `other_bitset` as our previous slice takes care of that.
+//         let itr = left
+//             .as_simd_blocks()
+//             .skip(overlap.left_offset)
+//             .take(overlap.overlap_len)
+//             .zip(right.as_simd_blocks().skip(overlap.right_offset));
+//     
+//         SparseOverlapIter {
+//             sparse: left,
+//             current_bitset: first_overlap.as_ref().map(|f| f.0).unwrap_or_default() as u32,
+//             current_root_block_offset: 0,
+//             current_block_idx: 0,
+//             overlap_state: first_overlap.map(|i| i.1),
+//             itr,
+//             _phantom: Default::default(),
+//         }
+//     }
+//     
+//     pub fn new_overlap_sub_blocks<'a>(
+//         left: &'a impl BitSet,
+//         right: &'a impl BitSet,
+//     ) -> SparseOverlapIter<'a, impl DoubleEndedIterator<Item = (Block, Block)> + ExactSizeIterator + 'a> {
+//         let overlap = calculate_overlap(left, right);
+//         // No need to `.take()` on `other_bitset` as our previous slice takes care of that.
+//         let itr = left
+//             .as_sub_blocks()
+//             .skip(overlap.left_offset * SimdBlock::USIZE_COUNT)
+//             .take(overlap.overlap_len * SimdBlock::USIZE_COUNT)
+//             .zip(right.as_sub_blocks().skip(overlap.right_offset * SimdBlock::USIZE_COUNT));
+//     
+//         SparseOverlapIter {
+//             itr,
+//             _phantom: Default::default(),
+//         }
+//     }
+// 
+//     #[derive(Debug)]
+//     pub struct OverlapState {
+//         pub left_offset: usize,
+//         pub right_offset: usize,
+//         pub overlap_start: usize,
+//         pub overlap_len: usize,
+//     }
+//     
+//     impl OverlapState {
+//         pub fn is_valid(&self) -> bool {
+//             self.overlap_start < self.overlap_len
+//         }
+//     }
+//     
+//     #[inline]
+//     pub fn calculate_overlap(left: &impl BitSet, right: &impl BitSet) -> OverlapState {
+//         let self_start = left.root_block_offset();
+//         let other_start = right.root_block_offset();
+//     
+//         let overlap_start = self_start.max(other_start);
+//         let overlap_end = left
+//             .root_block_len()
+//             .min(right.root_block_len());
+//     
+//         let left_offset = overlap_start - self_start;
+//         let right_offset = overlap_start - other_start;
+//         let overlap_len = overlap_end.saturating_sub(overlap_start);
+//         
+//         OverlapState {
+//             left_offset,
+//             right_offset,
+//             overlap_start,
+//             overlap_len,
+//         }
+//     }
+//     
+//     #[inline]
+//     pub fn overlap_start(left: &impl BitSet, right: &impl BitSet) -> usize {
+//         let self_start = left.root_block_offset();
+//         let other_start = right.root_block_offset();
+//     
+//         self_start.max(other_start)
+//     }
+//     
+//     impl<'a, T, I: Iterator<Item = (T, T)>> Iterator for SparseOverlapIter<'a, I> {
+//         type Item = (T, T);
+//     
+//         #[inline]
+//         fn next(&mut self) -> Option<Self::Item> {
+//             self.itr.next()
+//         }
+//     
+//         #[inline]
+//         fn size_hint(&self) -> (usize, Option<usize>) {
+//             self.itr.size_hint()
+//         }
+//     }
+//     
+//     impl<'a, T, I: ExactSizeIterator<Item = (T, T)>> ExactSizeIterator for SparseOverlapIter<'a, I> {
+//         #[inline]
+//         fn len(&self) -> usize {
+//             self.itr.len()
+//         }
+//     }
+//     
+//     impl<'a, T, I> DoubleEndedIterator for SparseOverlapIter<'a, I>
+//     where
+//         I: DoubleEndedIterator + Iterator<Item = (T, T)>,
+//     {
+//         #[inline]
+//         fn next_back(&mut self) -> Option<Self::Item> {
+//             self.itr.next_back()
+//         }
+//     
+//         #[inline]
+//         fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
+//             self.itr.nth_back(n)
+//         }
+//     }
+//     
+//     impl<'a, T, I: FusedIterator<Item = (T, T)>> FusedIterator for SparseOverlapIter<'a, I> {}
+// }
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec::Vec;
+    use crate::FixedBitSet;
     use crate::generic::BitSet;
     use crate::sparse::SparseBitSetCollection;
 
@@ -410,11 +526,28 @@ mod tests {
         let mut coll = SparseBitSetCollection::new();
 
         let idx = coll.push_collection(&[1, 512]);
-        let idx = coll.push_collection(&[128]);
+        let idx2 = coll.push_collection(&[128]);
         println!("Coll: {coll:?}\nIdx: {idx}");
 
         let set = coll.get_set_ref(idx);
 
         println!("Set: {set:?}\nItems: {:?}", set.root_block_offset());
+        println!("Data: {:?}", set.as_simd_blocks().collect::<Vec<_>>());
+    }
+
+    #[test]
+    pub fn test_sparse_subset() {
+        let mut fset = FixedBitSet::with_capacity(1000);
+        fset.insert_range(100..600);
+        let mut coll = SparseBitSetCollection::new();
+
+        let idx = coll.push_collection(&[1, 512]);
+        let idx2 = coll.push_collection(&[128]);
+
+        let set = coll.get_set_ref(idx);
+        let set2 = coll.get_set_ref(idx2);
+        
+        assert!(!set.is_subset(&fset));
+        assert!(set2.is_subset(&fset));
     }
 }

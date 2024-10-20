@@ -43,7 +43,7 @@ pub trait BitSet: Sized {
     fn overlap<'a>(
         &'a self,
         other: &'a impl BitSet,
-    ) -> OverlapIter<'a, impl DoubleEndedIterator<Item = (SimdBlock, SimdBlock)> + ExactSizeIterator>
+    ) -> impl DoubleEndedIterator<Item = (SimdBlock, SimdBlock)> + ExactSizeIterator + 'a
     {
         crate::iter::new_overlap_simd(self, other)
     }
@@ -53,7 +53,7 @@ pub trait BitSet: Sized {
     fn overlap_sub_blocks<'a>(
         &'a self,
         other: &'a impl BitSet,
-    ) -> OverlapIter<'a, impl DoubleEndedIterator<Item = (Block, Block)> + ExactSizeIterator>
+    ) -> impl DoubleEndedIterator<Item = (Block, Block)> + ExactSizeIterator + 'a
     {
         crate::iter::new_overlap_sub_blocks(self, other)
     }

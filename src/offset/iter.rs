@@ -66,7 +66,7 @@ pub fn calculate_overlap(left: &impl BitSet, right: &impl BitSet) -> OverlapStat
     let left_offset = overlap_start - self_start;
     let right_offset = overlap_start - other_start;
     let overlap_len = overlap_end.saturating_sub(overlap_start);
-    
+
     OverlapState {
         left_offset,
         right_offset,
