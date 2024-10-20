@@ -1,7 +1,7 @@
+use crate::generic::BitSet;
 use crate::SimdBlock;
 use crate::{Block, FixedBitSet, IndexRange};
 use alloc::vec::Vec;
-use crate::generic::BitSet;
 
 pub mod iter;
 
@@ -55,10 +55,10 @@ impl OffsetBitSetCollection {
     ///
     /// # Returns
     /// The index to access the new [OffsetBitSet]
-    pub fn push_collection_itr(&mut self, mut bits: impl ExactSizeIterator<Item=usize>) -> usize {
+    pub fn push_collection_itr(&mut self, mut bits: impl ExactSizeIterator<Item = usize>) -> usize {
         let Some(first_item) = bits.next() else {
             panic!("Need a non-empty set");
-        } ;
+        };
         let root_block_offset = first_item / SimdBlock::BITS;
 
         let blocks_offset = self.blocks.len();
@@ -243,16 +243,21 @@ pub struct OffsetBitSet<T> {
 }
 
 impl<T: AsRef<[SimdBlock]>> OffsetBitSet<T> {
-    pub fn as_fixed_bit_set(&self, bits: usize) -> FixedBitSet {
-        let bits_to_start = self.root_block_offset as usize * SimdBlock::BITS;
-        let total_bits = bits_to_start + self.as_simd_blocks().len() * SimdBlock::BITS;
-        assert!(total_bits < bits, "Creating a FixedBitSet out of an OffsetBitSet requires the total `bits` ({bits}) count to be larger than the OffsetBitSet's size ({total_bits})");
 
-        let sblock_count = self.root_block_offset as usize * SimdBlock::USIZE_COUNT;
-        let repeat = core::iter::repeat_n(0, sblock_count)
-            .chain(self.as_simd_blocks().flat_map(|v| v.into_usize_array()))
-            .chain(core::iter::repeat(0));
-        FixedBitSet::with_capacity_and_blocks(bits, repeat)
+    /// Return a reference to this [OffsetBitSet]
+    pub fn as_ref(&self) -> OffsetBitSetRef<'_> {
+        OffsetBitSetRef {
+            root_block_offset: self.root_block_offset,
+            blocks: self.blocks.as_ref(),
+        }
+    }
+    
+    /// Return an independent, owned, [OffsetBitSet]
+    pub fn to_owned(&self) -> OffsetBitSetOwned {
+        OffsetBitSetOwned {
+            root_block_offset: self.root_block_offset,
+            blocks: self.simd_blocks().to_vec(),
+        }
     }
 
     /// Return the amount of [SimdBlock]s
@@ -306,7 +311,7 @@ impl<T: AsMut<[SimdBlock]> + AsRef<[SimdBlock]>> OffsetBitSet<T> {
     }
 }
 
-impl<'a> OffsetBitSet<&'a [SimdBlock]> {
+impl<'a> OffsetBitSetRef<'a> {
     #[inline(always)]
     pub fn from_fixed_set<I: IndexRange>(block_offsets: I, other: &'a FixedBitSet) -> Self {
         let start = block_offsets.start().unwrap_or(0);
@@ -322,13 +327,13 @@ impl<'a> OffsetBitSet<&'a [SimdBlock]> {
 
 impl<T: AsRef<[SimdBlock]>> BitSet for OffsetBitSet<T> {
     #[inline(always)]
-    fn as_simd_blocks(&self) -> impl ExactSizeIterator<Item=SimdBlock> + DoubleEndedIterator {
+    fn as_simd_blocks(&self) -> impl ExactSizeIterator<Item = SimdBlock> + DoubleEndedIterator {
         self.simd_blocks().iter().copied()
     }
 
     #[inline(always)]
-    fn as_sub_blocks(&self) -> impl ExactSizeIterator<Item=Block> + DoubleEndedIterator {
-       self.sub_blocks().iter().copied()
+    fn as_sub_blocks(&self) -> impl ExactSizeIterator<Item = Block> + DoubleEndedIterator {
+        self.sub_blocks().iter().copied()
     }
 
     #[inline(always)]
@@ -368,9 +373,9 @@ pub fn test_subset() {
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec::Vec;
     use crate::generic::BitSet;
-    use crate::offset::{OffsetBitSetCollection};
+    use crate::offset::OffsetBitSetCollection;
+    use alloc::vec::Vec;
 
     #[test]
     pub fn test_push_offset_set() {

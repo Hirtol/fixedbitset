@@ -1,14 +1,13 @@
-use core::marker::PhantomData;
-use crate::{Block, FixedBitSet, Ones, SimdBlock, Zeroes, BITS};
-use crate::iter::SimdToSubIter;
 use crate::offset::iter::OverlapIter;
+use crate::{Block, FixedBitSet, Ones, SimdBlock, Zeroes, BITS};
+use core::marker::PhantomData;
 
 pub trait BitSet: Sized {
     /// Return the internal SIMD blocks of the [BitSet]
-    fn as_simd_blocks(&self) -> impl ExactSizeIterator<Item=SimdBlock> + DoubleEndedIterator;
+    fn as_simd_blocks(&self) -> impl ExactSizeIterator<Item = SimdBlock> + DoubleEndedIterator;
 
     /// Return sub-block representations of the [SimdBlock]s
-    fn as_sub_blocks(&self) -> impl ExactSizeIterator<Item=Block> + DoubleEndedIterator;
+    fn as_sub_blocks(&self) -> impl ExactSizeIterator<Item = Block> + DoubleEndedIterator;
 
     /// Return the amount of bits allocated to this [BitSet]
     fn bit_len(&self) -> usize;
@@ -44,9 +43,21 @@ pub trait BitSet: Sized {
     fn overlap<'a>(
         &'a self,
         other: &'a impl BitSet,
-    ) -> OverlapIter<'a, impl DoubleEndedIterator<Item=(SimdBlock, SimdBlock)> + ExactSizeIterator> {
+    ) -> OverlapIter<'a, impl DoubleEndedIterator<Item = (SimdBlock, SimdBlock)> + ExactSizeIterator>
+    {
         crate::iter::new_overlap_simd(self, other)
     }
+
+    /// Yield all [Block]s which overlap between the two given sets
+    #[inline]
+    fn overlap_sub_blocks<'a>(
+        &'a self,
+        other: &'a impl BitSet,
+    ) -> OverlapIter<'a, impl DoubleEndedIterator<Item = (Block, Block)> + ExactSizeIterator>
+    {
+        crate::iter::new_overlap_sub_blocks(self, other)
+    }
+
 
     /// An efficient way of checking whether `self` and `other` have any overlapping [SimdBlock]s
     #[inline(always)]
@@ -122,11 +133,11 @@ pub trait BitSet: Sized {
 }
 
 impl<'a, T: BitSet> BitSet for &'a T {
-    fn as_simd_blocks(&self) -> impl ExactSizeIterator<Item=SimdBlock> + DoubleEndedIterator {
+    fn as_simd_blocks(&self) -> impl ExactSizeIterator<Item = SimdBlock> + DoubleEndedIterator {
         (**self).as_simd_blocks()
     }
 
-    fn as_sub_blocks(&self) -> impl ExactSizeIterator<Item=Block> + DoubleEndedIterator {
+    fn as_sub_blocks(&self) -> impl ExactSizeIterator<Item = Block> + DoubleEndedIterator {
         (**self).as_sub_blocks()
     }
 
@@ -142,20 +153,18 @@ impl<'a, T: BitSet> BitSet for &'a T {
 pub struct LazyAnd<'a, A, B> {
     left: A,
     right: B,
-    _phantom: PhantomData<&'a ()>
+    _phantom: PhantomData<&'a ()>,
 }
 
 impl<'a, A: BitSet, B: BitSet> BitSet for LazyAnd<'a, A, B> {
     #[inline]
-    fn as_simd_blocks(&self) -> impl ExactSizeIterator<Item=SimdBlock> + DoubleEndedIterator {
-        self.left.overlap(&self.right)
-            .map(|(x, y)| x & y)
+    fn as_simd_blocks(&self) -> impl ExactSizeIterator<Item = SimdBlock> + DoubleEndedIterator {
+        self.left.overlap(&self.right).map(|(x, y)| x & y)
     }
 
     #[inline(always)]
-    fn as_sub_blocks(&self) -> impl ExactSizeIterator<Item=Block> + DoubleEndedIterator {
-        crate::iter::new_overlap_sub_blocks(&self.left, &self.right)
-            .map(|(x, y)| x & y)
+    fn as_sub_blocks(&self) -> impl ExactSizeIterator<Item = Block> + DoubleEndedIterator {
+        self.left.overlap_sub_blocks(&self.right).map(|(x, y)| x & y)
     }
 
     #[inline(always)]
@@ -170,7 +179,9 @@ impl<'a, A: BitSet, B: BitSet> BitSet for LazyAnd<'a, A, B> {
 }
 
 #[inline]
-pub(crate) fn ones_impl<'a>(set: &'a impl BitSet) -> Ones<'a, impl ExactSizeIterator<Item=usize> + DoubleEndedIterator + 'a> {
+pub(crate) fn ones_impl<'a>(
+    set: &'a impl BitSet,
+) -> Ones<'a, impl ExactSizeIterator<Item = usize> + DoubleEndedIterator + 'a> {
     let mut itr = set.as_sub_blocks();
     if let Some(first_block) = itr.next() {
         let last_block = itr.next_back().unwrap_or(0);
@@ -195,7 +206,9 @@ pub(crate) fn ones_impl<'a>(set: &'a impl BitSet) -> Ones<'a, impl ExactSizeIter
 }
 
 #[inline]
-pub(crate) fn zeroes_impl<'a>(set: &'a impl BitSet) -> Zeroes<'a, impl ExactSizeIterator<Item=usize> + DoubleEndedIterator + 'a> {
+pub(crate) fn zeroes_impl<'a>(
+    set: &'a impl BitSet,
+) -> Zeroes<'a, impl ExactSizeIterator<Item = usize> + DoubleEndedIterator + 'a> {
     let mut itr = set.as_sub_blocks();
     match itr.next() {
         Some(block) => Zeroes {
@@ -217,20 +230,20 @@ pub(crate) fn zeroes_impl<'a>(set: &'a impl BitSet) -> Zeroes<'a, impl ExactSize
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec::Vec;
     use crate::generic::{BitSet, LazyAnd};
     use crate::OffsetBitSetCollection;
+    use alloc::vec::Vec;
 
     #[test]
     pub fn test_lazy_and() {
         let mut base_collection = OffsetBitSetCollection::new();
-        
+
         let left_idx = base_collection.push_collection(&[128, 129, 256]);
         let right_idx = base_collection.push_collection(&[129, 256]);
-        
+
         let left = base_collection.get_set_ref(left_idx);
         let right = base_collection.get_set_ref(right_idx);
-        
+
         let combined = LazyAnd {
             left: &left,
             right: &right,
@@ -239,5 +252,25 @@ mod tests {
 
         let out = combined.ones().collect::<Vec<_>>();
         assert_eq!(out, vec![129, 256]);
+    }
+
+    #[test]
+    pub fn test_lazy_and_large() {
+        let mut base_collection = OffsetBitSetCollection::new();
+
+        let left_idx = base_collection.push_collection_itr((0..100).map(|i| i * 10));
+        let right_idx = base_collection.push_collection_itr((0..100).map(|i| i * 5));
+
+        let left = base_collection.get_set_ref(left_idx);
+        let right = base_collection.get_set_ref(right_idx);
+
+        let combined = LazyAnd {
+            left: &left,
+            right: &right,
+            _phantom: Default::default(),
+        };
+
+        let out = combined.ones().collect::<Vec<_>>();
+        assert_eq!(out, (0..50).map(|i| i * 10).collect::<Vec<_>>());
     }
 }
