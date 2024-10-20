@@ -15,6 +15,7 @@ pub fn new_overlap_simd<'a>(
 ) -> OverlapIter<'a, impl DoubleEndedIterator<Item = (SimdBlock, SimdBlock)> + ExactSizeIterator + 'a>
 {
     let overlap = calculate_overlap(left, right);
+    //println!("USING OVERLAP: {:?}", overlap);
     // No need to `.take()` on `other_bitset` as our previous slice takes care of that.
     let itr = left
         .as_simd_blocks()
@@ -46,6 +47,7 @@ pub fn new_overlap_sub_blocks<'a>(
     }
 }
 
+#[derive(Debug)]
 pub struct OverlapState {
     pub left_offset: usize,
     pub right_offset: usize,
@@ -110,6 +112,7 @@ where
 {
     #[inline]
     fn next_back(&mut self) -> Option<Self::Item> {
+        //println!("UHGH");
         self.itr.next_back()
     }
 

@@ -3,6 +3,7 @@ use crate::SimdBlock;
 use crate::{Block, OffsetBitSetRef};
 use alloc::vec::Vec;
 use core::iter::FlatMap;
+use crate::iter::SimdToSubIter;
 
 type SubOffsetIdx = u32;
 // pub type SparseBitSetOwned = SparseBitSet<'a, Vec<SimdBlock>>;
@@ -200,7 +201,7 @@ impl<'a, T: AsRef<[SimdBlock]>> SparseBitSet<'a, T> {
     fn len(&self) -> usize {
         self.simd_blocks().len()
     }
-    
+
     fn bit_sets_len(&self) -> usize {
         // Last item is to mark the end of the block list
         self.bitsets.offsets.len() - 1
@@ -210,7 +211,7 @@ impl<'a, T: AsRef<[SimdBlock]>> SparseBitSet<'a, T> {
     fn bit_sets(&'a self) -> impl ExactSizeIterator<Item=OffsetBitSetRef<'a>> + DoubleEndedIterator + 'a {
         (0..self.bit_sets_len()).map(move |i| unsafe {self.get_set_ref_unchecked(i) })
     }
-    
+
     #[inline]
     fn get_last_set(&self) -> OffsetBitSetRef<'_> {
         unsafe {
@@ -311,6 +312,7 @@ where
 {
     #[inline]
     fn next_back(&mut self) -> Option<U::Item> {
+        //println!("EUGHG");
         self.consumed += 1;
         self.inner.next_back()
     }
@@ -345,8 +347,8 @@ impl<'a, T: AsRef<[SimdBlock]>> BitSet for SparseBitSet<'a, T> {
     fn as_simd_blocks(&self) -> impl ExactSizeIterator<Item = SimdBlock> + DoubleEndedIterator {
         let mut recent_root_offset = self.root_block_offset();
         let last_set = self.get_last_set();
-        let final_len = last_set.root_block_offset as usize - recent_root_offset + last_set.blocks.len();
-        
+        let final_len = last_set.root_block_offset as usize - recent_root_offset + last_set.blocks.len() + 1;
+        //println!("Estamating : {final_len} - {last_set:?} - {recent_root_offset}");
         ExactSizeFlatten::new(final_len, self.bit_sets().flat_map(move |b| {
             let to_pad = b.root_block_offset as usize - recent_root_offset;
             recent_root_offset = b.root_block_offset as usize;
@@ -355,7 +357,8 @@ impl<'a, T: AsRef<[SimdBlock]>> BitSet for SparseBitSet<'a, T> {
     }
 
     fn as_sub_blocks(&self) -> impl ExactSizeIterator<Item = Block> + DoubleEndedIterator {
-        self.sub_blocks().iter().copied()
+        SimdToSubIter::new(self.as_simd_blocks())
+        // self.sub_blocks().iter().copied()
     }
 
     fn bit_len(&self) -> usize {
@@ -374,7 +377,7 @@ impl<'a, T: AsRef<[SimdBlock]>> BitSet for SparseBitSet<'a, T> {
 //     use crate::SimdBlock;
 //     use crate::Block;
 //     use crate::sparse::SparseBitSetRef;
-// 
+//
 //     #[derive(Debug)]
 //     pub struct SparseOverlapIter<'a, I> {
 //         sparse: &'a SparseBitSetRef<'a>,
@@ -385,7 +388,7 @@ impl<'a, T: AsRef<[SimdBlock]>> BitSet for SparseBitSet<'a, T> {
 //         itr: I,
 //         _phantom: PhantomData<&'a ()>,
 //     }
-//     
+//
 //     pub fn new_overlap_simd<'a>(
 //         left: &'a SparseBitSetRef<'a>,
 //         right: &'a impl BitSet,
@@ -394,14 +397,14 @@ impl<'a, T: AsRef<[SimdBlock]>> BitSet for SparseBitSet<'a, T> {
 //         let first_overlap = left.bit_sets().enumerate()
 //             .map(|(idx, off)| (idx, calculate_overlap(&off, right)))
 //             .filter(|(_, overlap)| overlap.is_valid()).next();
-//         
+//
 //         // No need to `.take()` on `other_bitset` as our previous slice takes care of that.
 //         let itr = left
 //             .as_simd_blocks()
 //             .skip(overlap.left_offset)
 //             .take(overlap.overlap_len)
 //             .zip(right.as_simd_blocks().skip(overlap.right_offset));
-//     
+//
 //         SparseOverlapIter {
 //             sparse: left,
 //             current_bitset: first_overlap.as_ref().map(|f| f.0).unwrap_or_default() as u32,
@@ -412,7 +415,7 @@ impl<'a, T: AsRef<[SimdBlock]>> BitSet for SparseBitSet<'a, T> {
 //             _phantom: Default::default(),
 //         }
 //     }
-//     
+//
 //     pub fn new_overlap_sub_blocks<'a>(
 //         left: &'a impl BitSet,
 //         right: &'a impl BitSet,
@@ -424,13 +427,13 @@ impl<'a, T: AsRef<[SimdBlock]>> BitSet for SparseBitSet<'a, T> {
 //             .skip(overlap.left_offset * SimdBlock::USIZE_COUNT)
 //             .take(overlap.overlap_len * SimdBlock::USIZE_COUNT)
 //             .zip(right.as_sub_blocks().skip(overlap.right_offset * SimdBlock::USIZE_COUNT));
-//     
+//
 //         SparseOverlapIter {
 //             itr,
 //             _phantom: Default::default(),
 //         }
 //     }
-// 
+//
 //     #[derive(Debug)]
 //     pub struct OverlapState {
 //         pub left_offset: usize,
@@ -438,27 +441,27 @@ impl<'a, T: AsRef<[SimdBlock]>> BitSet for SparseBitSet<'a, T> {
 //         pub overlap_start: usize,
 //         pub overlap_len: usize,
 //     }
-//     
+//
 //     impl OverlapState {
 //         pub fn is_valid(&self) -> bool {
 //             self.overlap_start < self.overlap_len
 //         }
 //     }
-//     
+//
 //     #[inline]
 //     pub fn calculate_overlap(left: &impl BitSet, right: &impl BitSet) -> OverlapState {
 //         let self_start = left.root_block_offset();
 //         let other_start = right.root_block_offset();
-//     
+//
 //         let overlap_start = self_start.max(other_start);
 //         let overlap_end = left
 //             .root_block_len()
 //             .min(right.root_block_len());
-//     
+//
 //         let left_offset = overlap_start - self_start;
 //         let right_offset = overlap_start - other_start;
 //         let overlap_len = overlap_end.saturating_sub(overlap_start);
-//         
+//
 //         OverlapState {
 //             left_offset,
 //             right_offset,
@@ -466,36 +469,36 @@ impl<'a, T: AsRef<[SimdBlock]>> BitSet for SparseBitSet<'a, T> {
 //             overlap_len,
 //         }
 //     }
-//     
+//
 //     #[inline]
 //     pub fn overlap_start(left: &impl BitSet, right: &impl BitSet) -> usize {
 //         let self_start = left.root_block_offset();
 //         let other_start = right.root_block_offset();
-//     
+//
 //         self_start.max(other_start)
 //     }
-//     
+//
 //     impl<'a, T, I: Iterator<Item = (T, T)>> Iterator for SparseOverlapIter<'a, I> {
 //         type Item = (T, T);
-//     
+//
 //         #[inline]
 //         fn next(&mut self) -> Option<Self::Item> {
 //             self.itr.next()
 //         }
-//     
+//
 //         #[inline]
 //         fn size_hint(&self) -> (usize, Option<usize>) {
 //             self.itr.size_hint()
 //         }
 //     }
-//     
+//
 //     impl<'a, T, I: ExactSizeIterator<Item = (T, T)>> ExactSizeIterator for SparseOverlapIter<'a, I> {
 //         #[inline]
 //         fn len(&self) -> usize {
 //             self.itr.len()
 //         }
 //     }
-//     
+//
 //     impl<'a, T, I> DoubleEndedIterator for SparseOverlapIter<'a, I>
 //     where
 //         I: DoubleEndedIterator + Iterator<Item = (T, T)>,
@@ -504,21 +507,21 @@ impl<'a, T: AsRef<[SimdBlock]>> BitSet for SparseBitSet<'a, T> {
 //         fn next_back(&mut self) -> Option<Self::Item> {
 //             self.itr.next_back()
 //         }
-//     
+//
 //         #[inline]
 //         fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
 //             self.itr.nth_back(n)
 //         }
 //     }
-//     
+//
 //     impl<'a, T, I: FusedIterator<Item = (T, T)>> FusedIterator for SparseOverlapIter<'a, I> {}
 // }
 
 #[cfg(test)]
 mod tests {
     use alloc::vec::Vec;
-    use crate::FixedBitSet;
-    use crate::generic::BitSet;
+    use crate::{FixedBitSet, OffsetBitSetCollection};
+    use crate::generic::{BitSet, LazyAnd};
     use crate::sparse::SparseBitSetCollection;
 
     #[test]
@@ -527,12 +530,12 @@ mod tests {
 
         let idx = coll.push_collection(&[1, 512]);
         let idx2 = coll.push_collection(&[128]);
-        println!("Coll: {coll:?}\nIdx: {idx}");
+        //println!("Coll: {coll:?}\nIdx: {idx}");
 
         let set = coll.get_set_ref(idx);
 
-        println!("Set: {set:?}\nItems: {:?}", set.root_block_offset());
-        println!("Data: {:?}", set.as_simd_blocks().collect::<Vec<_>>());
+        //println!("Set: {set:?}\nItems: {:?}", set.root_block_offset());
+        //println!("Data: {:?}", set.as_simd_blocks().collect::<Vec<_>>());
     }
 
     #[test]
@@ -546,8 +549,40 @@ mod tests {
 
         let set = coll.get_set_ref(idx);
         let set2 = coll.get_set_ref(idx2);
-        
+
         assert!(!set.is_subset(&fset));
         assert!(set2.is_subset(&fset));
+    }
+
+    #[test]
+    pub fn test_lazy_and_large() {
+        let mut fset = FixedBitSet::with_capacity(1000);
+        let mut fset2 = FixedBitSet::with_capacity(1000);
+        fset.insert_range(0..100);
+        fset2.insert_range(400..600);
+        let mut base_collection = SparseBitSetCollection::new();
+
+        let left_idx = base_collection.push_collection(&[250, 450]);
+        // let right_idx = base_collection.push_collection_itr((0..100).map(|i| i * 5));
+
+        let left = base_collection.get_set_ref(left_idx);
+        let left_cont = left.as_simd_blocks().collect::<Vec<_>>();
+        // let mut itr = left.as_simd_blocks();
+        // //println!("T: {:?}", itr.next_back());
+        // while let Some(i) = itr.next() {
+        //     //println!("CONT: {i:?}");
+        // }
+        // let right = base_collection.get_set_ref(right_idx);
+
+        //println!("ROOT: {:?}", base_collection);
+        //println!("CONTENT: {:?}", left_cont);
+        let things = left.ones().collect::<Vec<_>>();
+        let combined = left.lazy_and(&fset2);
+        let combined2 = combined.ones().collect::<Vec<_>>();
+        let comb_data = combined.as_simd_blocks().collect::<Vec<_>>();
+        //println!("STUFF: {combined2:?}\n{things:?}");
+        //println!("COMB: {:?}", comb_data);
+        assert!(!combined.is_subset(&fset));
+
     }
 }

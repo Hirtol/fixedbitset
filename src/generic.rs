@@ -27,7 +27,10 @@ pub trait BitSet: Sized {
         if overlap.len() == 0 {
             false
         } else {
-            overlap.all(|(x, y)| x.andnot(y).is_empty())
+            overlap.all(|(x, y)| {
+                //println!("CHECKING: {x:?} - {y:?}");
+                x.andnot(y).is_empty()
+            })
         }
     }
 
@@ -159,7 +162,10 @@ pub struct LazyAnd<'a, A, B> {
 impl<'a, A: BitSet, B: BitSet> BitSet for LazyAnd<'a, A, B> {
     #[inline]
     fn as_simd_blocks(&self) -> impl ExactSizeIterator<Item = SimdBlock> + DoubleEndedIterator {
-        self.left.overlap(&self.right).map(|(x, y)| x & y)
+        self.left.overlap(&self.right).map(|(x, y)| {
+            //println!("ANDING: {x:?} - {y:?}");
+            x & y
+        })
     }
 
     #[inline(always)]

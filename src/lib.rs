@@ -13,7 +13,7 @@
 //! once they appear in stable Rust.
 //!
 //! Currently only SSE2/AVX/AVX2 on x86/x86_64 and wasm32 SIMD are supported as this is what stable Rust supports.
-#![cfg_attr(not(test), no_std)]
+// #![cfg_attr(not(test), no_std)]
 #![deny(clippy::undocumented_unsafe_blocks)]
 
 extern crate alloc;
