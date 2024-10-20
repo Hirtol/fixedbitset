@@ -121,7 +121,7 @@ impl<I: Iterator<Item=SimdBlock>> Iterator for SimdToSubIter<I> {
                 if overflow {
                     // We know that there is nothing else, otherwise `current_block` would've been true
                     self.last_block = None;
-                    self.last_idx = SimdBlock::USIZE_COUNT;
+                    self.last_idx = SimdBlock::USIZE_COUNT - 1;
                 } else {
                     self.last_idx = next_value;
                 }
@@ -151,7 +151,7 @@ impl<I: DoubleEndedIterator<Item=SimdBlock>> DoubleEndedIterator for SimdToSubIt
                 let (next_value, overflow) = self.last_idx.overflowing_sub(1);
                 if overflow {
                     self.last_block = self.itr.next().map(|i| i.into_usize_array());
-                    self.last_idx = SimdBlock::USIZE_COUNT;
+                    self.last_idx = SimdBlock::USIZE_COUNT - 1;
                 } else {
                     self.last_idx = next_value;
                 }
