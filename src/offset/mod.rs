@@ -5,6 +5,7 @@ use alloc::vec::Vec;
 
 pub mod iter;
 pub mod sparse;
+pub mod iter_exact;
 
 pub type OffsetBitSetOwned = OffsetBitSet<Vec<SimdBlock>>;
 pub type OffsetBitSetRef<'a> = OffsetBitSet<&'a [SimdBlock]>;
