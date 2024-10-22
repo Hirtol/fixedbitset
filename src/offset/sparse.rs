@@ -1,9 +1,9 @@
 use crate::generic::BitSet;
+use crate::iter::SimdToSubIter;
 use crate::SimdBlock;
 use crate::{Block, OffsetBitSetRef};
 use alloc::vec::Vec;
 use core::iter::FlatMap;
-use crate::iter::SimdToSubIter;
 
 type SubOffsetIdx = u32;
 // pub type SparseBitSetOwned = SparseBitSet<'a, Vec<SimdBlock>>;
@@ -164,7 +164,9 @@ impl SparseBitSetCollection {
 
         SparseBitSetRef {
             bitsets: SparseOffsets {
-                offsets: self.sub_offsets.get_unchecked(offset as usize..next_offset as usize)
+                offsets: self
+                    .sub_offsets
+                    .get_unchecked(offset as usize..next_offset as usize),
             },
             blocks: &self.blocks,
         }
@@ -176,22 +178,41 @@ struct SparseOffsets<'a> {
     offsets: &'a [PseudoOffset],
 }
 
-impl<'a> SparseOffsets<'a> {
-    // pub fn offsets(
-    //     &self,
-    // ) -> impl ExactSizeIterator<Item = PseudoOffset> + DoubleEndedIterator + 'a {
-    //     let block_offset = self.block_base_offset;
-    //     self.offsets.iter().map(move |offset| PseudoOffset {
-    //         blocks_offset: offset.blocks_offset - block_offset,
-    //         root_bitset_offset: offset.root_bitset_offset,
-    //     })
-    // }
-}
-
 #[derive(Debug)]
 pub struct SparseBitSet<'a, T> {
     bitsets: SparseOffsets<'a>,
     blocks: T,
+}
+
+impl<'a> SparseBitSet<'a, &'a [SimdBlock]> {
+    /// Return the last set in this bitset.
+    ///
+    /// This differs from [Self::borrow_bit_sets] that the lifetime of the returned iterator and sets is _not_ dependent on `self`,
+    /// thus it can be obtained and stored alongside the bitset.
+    #[inline]
+    fn bit_sets(
+        &self,
+    ) -> impl ExactSizeIterator<Item = OffsetBitSetRef<'a>> + DoubleEndedIterator + 'a {
+        let blocks = self.blocks;
+        let offsets = self.bitsets.offsets;
+        // SAFETY: We know `i` to always be in range of our sets
+        (0..self.bit_sets_len()).map(move |i| unsafe { create_offset_bit_set(i, offsets, blocks) })
+    }
+
+    /// Return the last set in this bitset.
+    ///
+    /// This differs from [Self::borrow_last_set] that the lifetime of the returned set is _not_ dependent on `self`,
+    /// thus it can be obtained and stored alongside the bitset.
+    #[inline]
+    fn get_last_set(&self) -> OffsetBitSetRef<'a> {
+        // SAFETY: Guaranteed to be in range
+        unsafe { self.get_set_ref_unchecked(self.bit_sets_len() - 1) }
+    }
+
+    #[inline]
+    unsafe fn get_set_ref_unchecked(&self, bit_set: usize) -> OffsetBitSetRef<'a> {
+        create_offset_bit_set(bit_set, self.bitsets.offsets, self.blocks)
+    }
 }
 
 impl<'a, T: AsRef<[SimdBlock]>> SparseBitSet<'a, T> {
@@ -208,36 +229,38 @@ impl<'a, T: AsRef<[SimdBlock]>> SparseBitSet<'a, T> {
     }
 
     #[inline]
-    fn bit_sets(&'a self) -> impl ExactSizeIterator<Item=OffsetBitSetRef<'a>> + DoubleEndedIterator + 'a {
-        (0..self.bit_sets_len()).map(move |i| unsafe {self.get_set_ref_unchecked(i) })
+    fn borrow_bit_sets(
+        &self,
+    ) -> impl ExactSizeIterator<Item = OffsetBitSetRef<'_>> + DoubleEndedIterator {
+        // SAFETY: We know `i` to always be in range of our sets
+        (0..self.bit_sets_len()).map(move |i| unsafe { self.borrow_set_ref_unchecked(i) })
     }
 
     #[inline]
-    fn get_last_set(&self) -> OffsetBitSetRef<'_> {
-        unsafe {
-            self.get_set_ref_unchecked(self.bit_sets_len() - 1)
-        }
+    fn borrow_last_set(&self) -> OffsetBitSetRef<'_> {
+        // SAFETY: Guaranteed to be in range
+        unsafe { self.borrow_set_ref_unchecked(self.bit_sets_len() - 1) }
     }
 
     #[inline]
-    unsafe fn get_set_ref_unchecked(&self, bit_set: usize) -> OffsetBitSetRef<'_> {
-        let offset = self.bitsets.offsets.get_unchecked(bit_set);
-        let next_offset = self.bitsets.offsets.get_unchecked(bit_set + 1);
-        crate::OffsetBitSet {
-            root_block_offset: offset.root_bitset_offset,
-            blocks: self.blocks.as_ref()
-                .get_unchecked(offset.blocks_offset as usize..next_offset.blocks_offset as usize),
-        }
+    unsafe fn borrow_set_ref_unchecked(&self, bit_set: usize) -> OffsetBitSetRef<'_> {
+        create_offset_bit_set(bit_set, self.bitsets.offsets, self.blocks.as_ref())
     }
 
     #[inline(always)]
     fn simd_blocks(&self) -> &[SimdBlock] {
         // SAFETY: The [SparseBitSet] maintains the invariant that it is never empty, and has a last `offsets` element
         // which holds the end of the `blocks` array. It is thus safe to directly index as below.
+
         unsafe {
             let first = self.bitsets.offsets.get_unchecked(0);
-            let last = self.bitsets.offsets.get_unchecked(self.bitsets.offsets.len() - 1);
-            self.blocks.as_ref().get_unchecked(first.blocks_offset as usize..last.blocks_offset as usize)
+            let last = self
+                .bitsets
+                .offsets
+                .get_unchecked(self.bitsets.offsets.len() - 1);
+            self.blocks
+                .as_ref()
+                .get_unchecked(first.blocks_offset as usize..last.blocks_offset as usize)
         }
     }
 
@@ -250,6 +273,26 @@ impl<'a, T: AsRef<[SimdBlock]>> SparseBitSet<'a, T> {
                 self.simd_blocks().len() * SimdBlock::USIZE_COUNT,
             )
         }
+    }
+}
+
+/// Create an [OffsetBitSetRef] from a particular collection of bitsets.
+///
+/// # Safety
+/// `bit_set` must be in range, and `bit_set + 1` must point to a valid `offset`.
+#[inline(always)]
+unsafe fn create_offset_bit_set<'a>(
+    bit_set: usize,
+    offsets: &'a [PseudoOffset],
+    blocks: &'a [SimdBlock],
+) -> OffsetBitSetRef<'a> {
+    let offset = offsets.get_unchecked(bit_set);
+    let next_offset = offsets.get_unchecked(bit_set + 1);
+    crate::OffsetBitSet {
+        root_block_offset: offset.root_bitset_offset,
+        blocks: blocks
+            .as_ref()
+            .get_unchecked(offset.blocks_offset as usize..next_offset.blocks_offset as usize),
     }
 }
 
@@ -312,7 +355,7 @@ where
 {
     #[inline]
     fn next_back(&mut self) -> Option<U::Item> {
-        //println!("EUGHG");
+        println!("EUGHG");
         self.consumed += 1;
         self.inner.next_back()
     }
@@ -346,14 +389,18 @@ where
 impl<'a, T: AsRef<[SimdBlock]>> BitSet for SparseBitSet<'a, T> {
     fn as_simd_blocks(&self) -> impl ExactSizeIterator<Item = SimdBlock> + DoubleEndedIterator {
         let mut recent_root_offset = self.root_block_offset();
-        let last_set = self.get_last_set();
-        let final_len = last_set.root_block_offset as usize - recent_root_offset + last_set.blocks.len() + 1;
-        //println!("Estamating : {final_len} - {last_set:?} - {recent_root_offset}");
-        ExactSizeFlatten::new(final_len, self.bit_sets().flat_map(move |b| {
-            let to_pad = b.root_block_offset as usize - recent_root_offset;
-            recent_root_offset = b.root_block_offset as usize;
-            core::iter::repeat_n(SimdBlock::NONE, to_pad).chain(b.blocks.iter().copied())
-        }))
+        let last_set = self.borrow_last_set();
+        let final_len =
+            last_set.root_block_offset as usize - recent_root_offset + last_set.blocks.len() + 1;
+        println!("Estimating : {final_len} - {last_set:?} - {recent_root_offset}");
+        ExactSizeFlatten::new(
+            final_len,
+            self.borrow_bit_sets().flat_map(move |b| {
+                let to_pad = b.root_block_offset as usize - recent_root_offset;
+                recent_root_offset = b.root_block_offset as usize;
+                core::iter::repeat_n(SimdBlock::NONE, to_pad).chain(b.blocks.iter().copied())
+            }),
+        )
     }
 
     fn as_sub_blocks(&self) -> impl ExactSizeIterator<Item = Block> + DoubleEndedIterator {
@@ -366,8 +413,7 @@ impl<'a, T: AsRef<[SimdBlock]>> BitSet for SparseBitSet<'a, T> {
     }
 
     fn root_block_offset(&self) -> usize {
-        self.bitsets
-            .offsets[0].root_bitset_offset as usize
+        self.bitsets.offsets[0].root_bitset_offset as usize
     }
 }
 
@@ -519,10 +565,10 @@ impl<'a, T: AsRef<[SimdBlock]>> BitSet for SparseBitSet<'a, T> {
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec::Vec;
-    use crate::{FixedBitSet, OffsetBitSetCollection};
-    use crate::generic::{BitSet, LazyAnd};
+    use crate::generic::BitSet;
     use crate::sparse::SparseBitSetCollection;
+    use crate::FixedBitSet;
+    use alloc::vec::Vec;
 
     #[test]
     pub fn test_sparse() {
@@ -530,12 +576,12 @@ mod tests {
 
         let idx = coll.push_collection(&[1, 512]);
         let idx2 = coll.push_collection(&[128]);
-        //println!("Coll: {coll:?}\nIdx: {idx}");
+        println!("Coll: {coll:?}\nIdx: {idx}");
 
         let set = coll.get_set_ref(idx);
 
-        //println!("Set: {set:?}\nItems: {:?}", set.root_block_offset());
-        //println!("Data: {:?}", set.as_simd_blocks().collect::<Vec<_>>());
+        println!("Set: {set:?}\nItems: {:?}", set.root_block_offset());
+        println!("Data: {:?}", set.as_simd_blocks().collect::<Vec<_>>());
     }
 
     #[test]
@@ -568,21 +614,20 @@ mod tests {
         let left = base_collection.get_set_ref(left_idx);
         let left_cont = left.as_simd_blocks().collect::<Vec<_>>();
         // let mut itr = left.as_simd_blocks();
-        // //println!("T: {:?}", itr.next_back());
+        // println!("T: {:?}", itr.next_back());
         // while let Some(i) = itr.next() {
-        //     //println!("CONT: {i:?}");
+        //     println!("CONT: {i:?}");
         // }
         // let right = base_collection.get_set_ref(right_idx);
 
-        //println!("ROOT: {:?}", base_collection);
-        //println!("CONTENT: {:?}", left_cont);
+        println!("ROOT: {:?}", base_collection);
+        println!("CONTENT: {:?}", left_cont);
         let things = left.ones().collect::<Vec<_>>();
         let combined = left.lazy_and(&fset2);
         let combined2 = combined.ones().collect::<Vec<_>>();
         let comb_data = combined.as_simd_blocks().collect::<Vec<_>>();
-        //println!("STUFF: {combined2:?}\n{things:?}");
-        //println!("COMB: {:?}", comb_data);
+        println!("STUFF: {combined2:?}\n{things:?}");
+        println!("COMB: {:?}", comb_data);
         assert!(!combined.is_subset(&fset));
-
     }
 }

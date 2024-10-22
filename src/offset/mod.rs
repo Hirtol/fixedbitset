@@ -427,14 +427,14 @@ mod tests {
         assert!(set.has_overlap(&other));
         let overlap = set.overlap(&other).collect::<Vec<_>>();
         assert_eq!(overlap.len(), 2);
-        //println!("Overlap: {overlap:?}");
+        println!("Overlap: {overlap:?}");
 
         let other_new = base_collection.push_collection(&[256]);
         let other_new = base_collection.get_set_ref(other_new);
 
         let set = base_collection.get_set_ref(index);
         let overlap = set.overlap(&other_new).collect::<Vec<_>>();
-        //println!("Overlap: {overlap:?}");
+        println!("Overlap: {overlap:?}");
 
         assert_eq!(overlap.len(), 1);
     }
