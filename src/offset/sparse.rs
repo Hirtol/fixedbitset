@@ -190,7 +190,7 @@ impl<'a> SparseBitSet<'a, &'a [SimdBlock]> {
     /// This differs from [Self::borrow_bit_sets] that the lifetime of the returned iterator and sets is _not_ dependent on `self`,
     /// thus it can be obtained and stored alongside the bitset.
     #[inline]
-    fn bit_sets(
+    pub fn bit_sets(
         &self,
     ) -> impl ExactSizeIterator<Item = OffsetBitSetRef<'a>> + DoubleEndedIterator + 'a {
         let blocks = self.blocks;
@@ -226,6 +226,11 @@ impl<'a, T: AsRef<[SimdBlock]>> SparseBitSet<'a, T> {
     fn bit_sets_len(&self) -> usize {
         // Last item is to mark the end of the block list
         self.bitsets.offsets.len() - 1
+    }
+
+    #[inline]
+    pub fn root_block_offsets(&self) -> impl ExactSizeIterator<Item=usize> + DoubleEndedIterator + '_ {
+        self.bitsets.offsets.iter().map(|off| off.root_bitset_offset as usize)
     }
 
     #[inline]
@@ -392,7 +397,7 @@ impl<'a, T: AsRef<[SimdBlock]>> BitSet for SparseBitSet<'a, T> {
         let last_set = self.borrow_last_set();
         let final_len =
             last_set.root_block_offset as usize - recent_root_offset + last_set.blocks.len() + 1;
-        println!("Estimating : {final_len} - {last_set:?} - {recent_root_offset}");
+        // println!("Estimating : {final_len} - {last_set:?} - {recent_root_offset}");
         ExactSizeFlatten::new(
             final_len,
             self.borrow_bit_sets().flat_map(move |b| {

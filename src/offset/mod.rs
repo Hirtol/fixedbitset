@@ -241,7 +241,7 @@ impl OffsetBitSetCollection {
 #[derive(Debug)]
 pub struct OffsetBitSet<T> {
     root_block_offset: u32,
-    blocks: T,
+    pub blocks: T,
 }
 
 impl<T: AsRef<[SimdBlock]>> OffsetBitSet<T> {

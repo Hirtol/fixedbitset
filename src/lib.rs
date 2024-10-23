@@ -24,6 +24,7 @@ mod range;
 
 pub mod offset;
 pub mod generic;
+pub mod specific;
 
 #[cfg(feature = "serde")]
 extern crate serde;
