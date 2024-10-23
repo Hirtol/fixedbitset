@@ -1,6 +1,5 @@
 use std::marker::PhantomData;
-use crate::{Block, FixedBitSet};
-use crate::generic::BitSet;
+use crate::{FixedBitSet};
 use crate::sparse::SparseBitSet;
 use crate::SimdBlock;
 
@@ -29,12 +28,16 @@ impl<'a> SubBitSet<'a> for FixedBitSet {
 impl<'a> SubBitSet<'a> for LazyAnd<'a, SparseBitSet<'a, &'a [SimdBlock]>, &FixedBitSet> {
     #[inline]
     fn is_subset(&self, other: &FixedBitSet) -> bool {
-        let mut overlap = calculate_overlap(&self.left, &self.right);
+        let mut overlap = calculate_overlap(&self.left, self.right);
         overlap.all(|(overlap, new_itr)| {
-            let other_itr = &other.as_simd_slice()[overlap.overlap_start..];
-            new_itr.map(|(x, y)| x & y)
+            // SAFETY: Requires that `other` is at least as long as `self.right`.
+            let other_itr = unsafe {
+                other.as_simd_slice().get_unchecked(overlap.overlap_start..)
+            };
+            new_itr.map(|(x, y)| *x & *y)
                 .zip(other_itr)
-                .all(|(x, y)| x.andnot(*y).is_empty())
+                // .all(|(x, y)| x.andnot(*y).is_empty())
+                .all(|(x, y)| x & *y == x)
         })
     }
 }
@@ -60,8 +63,7 @@ impl<'a> SubBitSet<'a> for SparseBitSet<'a, &'a [SimdBlock]> {
         let result = overlap.all(|(_, mut set)| {
             sets_handled += 1;
             set.all(|(x, y)| {
-                // println!("CHECKING: {x:?} - {y:?}");
-                x.andnot(y).is_empty()
+                x.andnot(*y).is_empty()
             })
         });
         // Ensure that .all() wasn't empty!
@@ -73,17 +75,18 @@ impl<'a> SubBitSet<'a> for SparseBitSet<'a, &'a [SimdBlock]> {
 pub fn calculate_overlap<'a>(
     left: &'a SparseBitSet<'a, &'a [SimdBlock]>,
     right: &'a FixedBitSet,
-) -> impl Iterator<Item = (crate::iter::OverlapState, impl Iterator<Item=(SimdBlock, SimdBlock)> + 'a)> {
+) -> impl Iterator<Item = (crate::iter::OverlapState, impl Iterator<Item=(&'a SimdBlock, &'a SimdBlock)> + 'a)> {
     left.bit_sets().map(|sub_set| {
         let overlap = crate::iter::calculate_overlap(&sub_set, right);
-        // println!("USING OVERLAP: {:?}", overlap);
-        // No need to `.take()` on `other_bitset` as our previous slice takes care of that.
-        let itr = sub_set
-            .blocks.iter()
-            .copied()
-            .skip(overlap.left_offset)
-            .take(overlap.overlap_len)
-            .zip(right.as_simd_slice()[overlap.right_offset..].iter().copied());
+        // SAFETY: The calculating in `calculate_overlap` ensures that nothing is ever out of bounds.
+        let itr = unsafe {
+            sub_set
+                .blocks.get_unchecked(overlap.left_offset..overlap.left_offset + overlap.overlap_len)
+                .iter()
+                .zip(right.as_simd_slice().get_unchecked(overlap.right_offset..))
+        };
+        
+        
         (overlap, itr)
     })
 }
