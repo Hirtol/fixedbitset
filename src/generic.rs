@@ -1,4 +1,3 @@
-use crate::offset::iter::OverlapIter;
 use crate::{Block, FixedBitSet, Ones, SimdBlock, Zeroes, BITS};
 use core::marker::PhantomData;
 

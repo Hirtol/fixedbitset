@@ -271,11 +271,12 @@ impl<'a, T: AsRef<[SimdBlock]>> SparseBitSet<'a, T> {
 
     #[inline(always)]
     fn sub_blocks(&self) -> &[Block] {
+        let simd_blocks = self.simd_blocks();
         // SAFETY: The representations of SimdBlock and Block are guaranteed to be interchangeable.
         unsafe {
             core::slice::from_raw_parts(
-                self.simd_blocks().as_ptr().cast(),
-                self.simd_blocks().len() * SimdBlock::USIZE_COUNT,
+                simd_blocks.as_ptr().cast(),
+                simd_blocks.len() * SimdBlock::USIZE_COUNT,
             )
         }
     }
@@ -580,7 +581,6 @@ mod tests {
         let mut coll = SparseBitSetCollection::new();
 
         let idx = coll.push_collection(&[1, 512]);
-        let idx2 = coll.push_collection(&[128]);
         println!("Coll: {coll:?}\nIdx: {idx}");
 
         let set = coll.get_set_ref(idx);

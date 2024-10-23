@@ -36,8 +36,7 @@ impl<'a> SubBitSet<'a> for LazyAnd<'a, SparseBitSet<'a, &'a [SimdBlock]>, &Fixed
             };
             new_itr.map(|(x, y)| *x & *y)
                 .zip(other_itr)
-                // .all(|(x, y)| x.andnot(*y).is_empty())
-                .all(|(x, y)| x & *y == x)
+                .all(|(x, y)| x.andnot(*y).is_empty())
         })
     }
 }
@@ -85,8 +84,8 @@ pub fn calculate_overlap<'a>(
                 .iter()
                 .zip(right.as_simd_slice().get_unchecked(overlap.right_offset..))
         };
-        
-        
+
+
         (overlap, itr)
     })
 }
@@ -94,7 +93,6 @@ pub fn calculate_overlap<'a>(
 #[cfg(test)]
 mod tests {
     use crate::FixedBitSet;
-    // use crate::generic::BitSet;
     use super::SubBitSet;
     use crate::sparse::SparseBitSetCollection;
 
@@ -107,35 +105,17 @@ mod tests {
         let mut base_collection = SparseBitSetCollection::new();
 
         let left_idx = base_collection.push_collection(&[250, 450]);
-        // let right_idx = base_collection.push_collection_itr((0..100).map(|i| i * 5));
 
         let left = base_collection.get_set_ref(left_idx);
 
         assert!(!left.is_subset(&fset));
         let combined = super::LazyAnd {
-            left: left,
+            left,
             right: &fset2,
             _phantom: Default::default(),
         };
 
         assert!(combined.is_subset(&fset2));
         assert!(!combined.is_subset(&fset));
-        // let left_cont = left.as_simd_blocks().collect::<Vec<_>>();
-        // let mut itr = left.as_simd_blocks();
-        // println!("T: {:?}", itr.next_back());
-        // while let Some(i) = itr.next() {
-        //     println!("CONT: {i:?}");
-        // }
-        // let right = base_collection.get_set_ref(right_idx);
-
-        // println!("ROOT: {:?}", base_collection);
-        // println!("CONTENT: {:?}", left_cont);
-        // let things = left.ones().collect::<Vec<_>>();
-        // let combined = left.lazy_and(&fset2);
-        // let combined2 = combined.ones().collect::<Vec<_>>();
-        // let comb_data = combined.as_simd_blocks().collect::<Vec<_>>();
-        // println!("STUFF: {combined2:?}\n{things:?}");
-        // println!("COMB: {:?}", comb_data);
-        // assert!(!combined.is_subset(&fset));
     }
 }
