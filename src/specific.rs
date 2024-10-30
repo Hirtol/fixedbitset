@@ -1,8 +1,10 @@
-use std::marker::PhantomData;
-use crate::{FixedBitSet};
+use crate::iter::{OverlapState, SimdToSubIter};
 use crate::sparse::SparseBitSet;
-use crate::SimdBlock;
+use crate::{SimdBlock};
+use crate::FixedBitSet;
+use std::marker::PhantomData;
 
+#[derive(Debug)]
 pub struct LazyAnd<'a, A, B> {
     left: A,
     right: B,
@@ -19,6 +21,29 @@ impl<'a, A, B> LazyAnd<'a, A, B> {
     }
 }
 
+impl<'a> LazyAnd<'a, SparseBitSet<'a, &'a [SimdBlock]>, &FixedBitSet> {
+    pub fn ones(&self) -> impl DoubleEndedIterator<Item = usize> + '_ {
+        self.anded().flat_map(|(overlap, itr)| {
+            let itr = SimdToSubIter::new(itr);
+            let bit_offset = overlap.overlap_start * SimdBlock::BITS;
+
+            crate::generic::ones_impl(itr).map(move |i| bit_offset + i)
+        })
+    }
+
+    pub fn anded(
+        &self,
+    ) -> impl DoubleEndedIterator<
+        Item = (
+            OverlapState,
+            impl DoubleEndedIterator<Item = SimdBlock> + ExactSizeIterator + '_,
+        ),
+    > + ExactSizeIterator {
+        calculate_overlap(&self.left, self.right)
+            .map(|(overlap, new_itr)| (overlap, new_itr.map(|(x, y)| *x & *y)))
+    }
+}
+
 impl<'a> SubBitSet<'a> for FixedBitSet {
     fn is_subset(&self, other: &FixedBitSet) -> bool {
         self.is_subset(other)
@@ -28,15 +53,10 @@ impl<'a> SubBitSet<'a> for FixedBitSet {
 impl<'a> SubBitSet<'a> for LazyAnd<'a, SparseBitSet<'a, &'a [SimdBlock]>, &FixedBitSet> {
     #[inline]
     fn is_subset(&self, other: &FixedBitSet) -> bool {
-        let mut overlap = calculate_overlap(&self.left, self.right);
-        overlap.all(|(overlap, new_itr)| {
+        self.anded().all(|(overlap, new_itr)| {
             // SAFETY: Requires that `other` is at least as long as `self.right`.
-            let other_itr = unsafe {
-                other.as_simd_slice().get_unchecked(overlap.overlap_start..)
-            };
-            new_itr.map(|(x, y)| *x & *y)
-                .zip(other_itr)
-                .all(|(x, y)| x.andnot(*y).is_empty())
+            let other_itr = unsafe { other.as_simd_slice().get_unchecked(overlap.overlap_start..) };
+            new_itr.zip(other_itr).all(|(x, y)| x.andnot(*y).is_empty())
         })
     }
 }
@@ -61,9 +81,7 @@ impl<'a> SubBitSet<'a> for SparseBitSet<'a, &'a [SimdBlock]> {
 
         let result = overlap.all(|(_, mut set)| {
             sets_handled += 1;
-            set.all(|(x, y)| {
-                x.andnot(*y).is_empty()
-            })
+            set.all(|(x, y)| x.andnot(*y).is_empty())
         });
         // Ensure that .all() wasn't empty!
         result && sets_handled != 0
@@ -74,17 +92,22 @@ impl<'a> SubBitSet<'a> for SparseBitSet<'a, &'a [SimdBlock]> {
 pub fn calculate_overlap<'a>(
     left: &'a SparseBitSet<'a, &'a [SimdBlock]>,
     right: &'a FixedBitSet,
-) -> impl Iterator<Item = (crate::iter::OverlapState, impl Iterator<Item=(&'a SimdBlock, &'a SimdBlock)> + 'a)> {
+) -> impl DoubleEndedIterator<
+    Item = (
+        crate::iter::OverlapState,
+        impl DoubleEndedIterator<Item = (&'a SimdBlock, &'a SimdBlock)> + ExactSizeIterator + 'a,
+    ),
+> + ExactSizeIterator {
     left.bit_sets().map(|sub_set| {
         let overlap = crate::iter::calculate_overlap(&sub_set, right);
         // SAFETY: The calculating in `calculate_overlap` ensures that nothing is ever out of bounds.
         let itr = unsafe {
             sub_set
-                .blocks.get_unchecked(overlap.left_offset..overlap.left_offset + overlap.overlap_len)
+                .blocks
+                .get_unchecked(overlap.left_offset..overlap.left_offset + overlap.overlap_len)
                 .iter()
                 .zip(right.as_simd_slice().get_unchecked(overlap.right_offset..))
         };
-
 
         (overlap, itr)
     })
@@ -92,9 +115,9 @@ pub fn calculate_overlap<'a>(
 
 #[cfg(test)]
 mod tests {
-    use crate::FixedBitSet;
     use super::SubBitSet;
     use crate::sparse::SparseBitSetCollection;
+    use crate::FixedBitSet;
 
     #[test]
     pub fn test_lazy_and_large() {
@@ -107,7 +130,7 @@ mod tests {
         let left_idx = base_collection.push_collection(&[250, 450]);
 
         let left = base_collection.get_set_ref(left_idx);
-
+        
         assert!(!left.is_subset(&fset));
         let combined = super::LazyAnd {
             left,
@@ -117,5 +140,7 @@ mod tests {
 
         assert!(combined.is_subset(&fset2));
         assert!(!combined.is_subset(&fset));
+        let values = combined.ones().collect::<Vec<_>>();
+        println!("VALUES: {values:?} - {combined:?}");
     }
 }

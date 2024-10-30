@@ -1,6 +1,6 @@
 use crate::generic::BitSet;
 use crate::iter::SimdToSubIter;
-use crate::SimdBlock;
+use crate::{Ones, SimdBlock, BITS};
 use crate::{Block, OffsetBitSetRef};
 use alloc::vec::Vec;
 use core::iter::FlatMap;
@@ -185,6 +185,34 @@ pub struct SparseBitSet<'a, T> {
 }
 
 impl<'a> SparseBitSet<'a, &'a [SimdBlock]> {
+    /// Return all indexes of set bits.
+    pub fn ones(&self) -> impl DoubleEndedIterator<Item=usize> + 'a {
+        self.bit_sets().flat_map(|bit_set| {
+            let offset = bit_set.root_block_offset() * SimdBlock::BITS;
+            match bit_set.sub_blocks().split_first() {
+                Some((&first_block, rem)) => {
+                    let (&last_block, rem) = rem.split_last().unwrap_or((&0, rem));
+                    Ones {
+                        bitset_front: first_block,
+                        bitset_back: last_block,
+                        block_idx_front: 0,
+                        block_idx_back: (1 + rem.len()) * BITS,
+                        remaining_blocks: rem.iter().copied(),
+                        _phantom: Default::default(),
+                    }
+                }
+                None => Ones {
+                    bitset_front: 0,
+                    bitset_back: 0,
+                    block_idx_front: 0,
+                    block_idx_back: 0,
+                    remaining_blocks: [].iter().copied(),
+                    _phantom: Default::default(),
+                },
+            }.map(move |i| i + offset)
+        })
+    }
+    
     /// Return the last set in this bitset.
     ///
     /// This differs from [Self::borrow_bit_sets] that the lifetime of the returned iterator and sets is _not_ dependent on `self`,
@@ -219,11 +247,11 @@ impl<'a, T: AsRef<[SimdBlock]>> SparseBitSet<'a, T> {
     /// Return the amount of [SimdBlock]s
     #[inline(always)]
     #[allow(dead_code)]
-    fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.simd_blocks().len()
     }
 
-    fn bit_sets_len(&self) -> usize {
+    pub(crate) fn bit_sets_len(&self) -> usize {
         // Last item is to mark the end of the block list
         self.bitsets.offsets.len() - 1
     }
@@ -234,7 +262,7 @@ impl<'a, T: AsRef<[SimdBlock]>> SparseBitSet<'a, T> {
     }
 
     #[inline]
-    fn borrow_bit_sets(
+    pub(crate) fn borrow_bit_sets(
         &self,
     ) -> impl ExactSizeIterator<Item = OffsetBitSetRef<'_>> + DoubleEndedIterator {
         // SAFETY: We know `i` to always be in range of our sets
@@ -253,7 +281,7 @@ impl<'a, T: AsRef<[SimdBlock]>> SparseBitSet<'a, T> {
     }
 
     #[inline(always)]
-    fn simd_blocks(&self) -> &[SimdBlock] {
+    pub(crate) fn simd_blocks(&self) -> &[SimdBlock] {
         // SAFETY: The [SparseBitSet] maintains the invariant that it is never empty, and has a last `offsets` element
         // which holds the end of the `blocks` array. It is thus safe to directly index as below.
 
@@ -270,7 +298,7 @@ impl<'a, T: AsRef<[SimdBlock]>> SparseBitSet<'a, T> {
     }
 
     #[inline(always)]
-    fn sub_blocks(&self) -> &[Block] {
+    pub(crate) fn sub_blocks(&self) -> &[Block] {
         let simd_blocks = self.simd_blocks();
         // SAFETY: The representations of SimdBlock and Block are guaranteed to be interchangeable.
         unsafe {

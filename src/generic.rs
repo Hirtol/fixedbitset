@@ -74,7 +74,7 @@ pub trait BitSet: Sized {
     #[inline]
     fn ones(&self) -> impl Iterator<Item = usize> {
         let offset = self.root_block_offset() * SimdBlock::BITS;
-        ones_impl(self).map(move |i| i + offset)
+        ones_impl(self.as_sub_blocks()).map(move |i| i + offset)
     }
 
     /// Iterates over all disabled bits.
@@ -185,9 +185,8 @@ impl<'a, A: BitSet, B: BitSet> BitSet for LazyAnd<'a, A, B> {
 
 #[inline]
 pub(crate) fn ones_impl<'a>(
-    set: &'a impl BitSet,
+    mut itr: impl ExactSizeIterator<Item = Block> + DoubleEndedIterator + 'a,
 ) -> Ones<'a, impl ExactSizeIterator<Item = usize> + DoubleEndedIterator + 'a> {
-    let mut itr = set.as_sub_blocks();
     if let Some(first_block) = itr.next() {
         let last_block = itr.next_back().unwrap_or(0);
         Ones {

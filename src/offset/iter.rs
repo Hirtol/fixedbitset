@@ -138,6 +138,7 @@ impl<I: Iterator<Item = SimdBlock> + DoubleEndedIterator> SimdToSubIter<I> {
     pub fn new(mut blocks: I) -> Self {
         let block = blocks.next();
         let last_block = blocks.next_back();
+        
         Self {
             current_idx: 0,
             current_block: block.map(|i| i.into_usize_array()),
@@ -178,7 +179,7 @@ impl<I: Iterator<Item = SimdBlock>> Iterator for SimdToSubIter<I> {
 
                 Some(out)
             }
-            (None, None) => None,
+            (_, _) => None,
         }
     }
 
@@ -211,7 +212,8 @@ impl<I: DoubleEndedIterator<Item = SimdBlock>> DoubleEndedIterator for SimdToSub
                 Some(out)
             }
             (Some(block), _) => {
-                let out = block[SimdBlock::USIZE_COUNT - 1 - self.current_idx];
+                let out = block[self.current_idx];
+                
                 self.current_idx += 1;
 
                 if self.current_idx >= SimdBlock::USIZE_COUNT {

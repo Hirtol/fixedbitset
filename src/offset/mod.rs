@@ -258,7 +258,7 @@ impl<T: AsRef<[SimdBlock]>> OffsetBitSet<T> {
     pub fn to_owned(&self) -> OffsetBitSetOwned {
         OffsetBitSetOwned {
             root_block_offset: self.root_block_offset,
-            blocks: self.simd_blocks().to_vec(),
+            blocks: self.ref_simd_blocks().to_vec(),
         }
     }
 
@@ -277,17 +277,17 @@ impl<T: AsRef<[SimdBlock]>> OffsetBitSet<T> {
     }
 
     #[inline(always)]
-    fn simd_blocks(&self) -> &[SimdBlock] {
+    pub(crate) fn ref_simd_blocks(&self) -> &[SimdBlock] {
         self.blocks.as_ref()
     }
 
     #[inline(always)]
-    fn sub_blocks(&self) -> &[Block] {
+    pub(crate) fn ref_sub_blocks(&self) -> &[Block] {
         // SAFETY: The representations of SimdBlock and Block are guaranteed to be interchangeable.
         unsafe {
             core::slice::from_raw_parts(
-                self.simd_blocks().as_ptr().cast(),
-                self.simd_blocks().len() * SimdBlock::USIZE_COUNT,
+                self.ref_simd_blocks().as_ptr().cast(),
+                self.ref_simd_blocks().len() * SimdBlock::USIZE_COUNT,
             )
         }
     }
@@ -313,6 +313,24 @@ impl<T: AsMut<[SimdBlock]> + AsRef<[SimdBlock]>> OffsetBitSet<T> {
     }
 }
 
+impl<'a> OffsetBitSet<&'a [SimdBlock]> {
+    #[inline(always)]
+    pub(crate) fn simd_blocks(&self) -> &'a [SimdBlock] {
+        self.blocks
+    }
+
+    #[inline(always)]
+    pub(crate) fn sub_blocks(&self) -> &'a [Block] {
+        // SAFETY: The representations of SimdBlock and Block are guaranteed to be interchangeable.
+        unsafe {
+            core::slice::from_raw_parts(
+                self.blocks.as_ptr().cast(),
+                self.blocks.len() * SimdBlock::USIZE_COUNT,
+            )
+        }
+    }
+}
+
 impl<'a> OffsetBitSetRef<'a> {
     #[inline(always)]
     pub fn from_fixed_set<I: IndexRange>(block_offsets: I, other: &'a FixedBitSet) -> Self {
@@ -330,12 +348,12 @@ impl<'a> OffsetBitSetRef<'a> {
 impl<T: AsRef<[SimdBlock]>> BitSet for OffsetBitSet<T> {
     #[inline(always)]
     fn as_simd_blocks(&self) -> impl ExactSizeIterator<Item = SimdBlock> + DoubleEndedIterator {
-        self.simd_blocks().iter().copied()
+        self.ref_simd_blocks().iter().copied()
     }
 
     #[inline(always)]
     fn as_sub_blocks(&self) -> impl ExactSizeIterator<Item = Block> + DoubleEndedIterator {
-        self.sub_blocks().iter().copied()
+        self.ref_sub_blocks().iter().copied()
     }
 
     #[inline(always)]
