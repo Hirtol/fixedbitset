@@ -1,7 +1,7 @@
 use crate::iter::{OverlapState, SimdToSubIter};
 use crate::sparse::SparseBitSet;
-use crate::{SimdBlock};
 use crate::FixedBitSet;
+use crate::SimdBlock;
 use std::marker::PhantomData;
 
 #[derive(Debug)]
@@ -48,6 +48,10 @@ impl<'a> SubBitSet<'a> for FixedBitSet {
     fn is_subset(&self, other: &FixedBitSet) -> bool {
         self.is_subset(other)
     }
+
+    fn count_ones(&self) -> usize {
+        self.count_ones(..)
+    }
 }
 
 impl<'a> SubBitSet<'a> for LazyAnd<'a, SparseBitSet<'a, &'a [SimdBlock]>, &FixedBitSet> {
@@ -59,13 +63,31 @@ impl<'a> SubBitSet<'a> for LazyAnd<'a, SparseBitSet<'a, &'a [SimdBlock]>, &Fixed
             new_itr.zip(other_itr).all(|(x, y)| x.andnot(*y).is_empty())
         })
     }
+
+    fn count_ones(&self) -> usize {
+        self.anded()
+            .map(|(_, new_itr)| {
+                new_itr.map(|block| {
+                    block
+                        .into_usize_array()
+                        .iter()
+                        .map(|sub| sub.count_ones() as usize)
+                        .sum::<usize>()
+                }).sum::<usize>()
+            })
+            .sum()
+    }
 }
 
 pub trait SubBitSet<'a>: Sized {
     fn to_sparse_set(self) -> SparseBitSet<'a, &'a [SimdBlock]> {
         panic!()
     }
+    
     fn is_subset(&self, other: &FixedBitSet) -> bool;
+
+    /// Count the amount of ones available in this full bitset.
+    fn count_ones(&self) -> usize;
 }
 
 impl<'a> SubBitSet<'a> for SparseBitSet<'a, &'a [SimdBlock]> {
@@ -85,6 +107,13 @@ impl<'a> SubBitSet<'a> for SparseBitSet<'a, &'a [SimdBlock]> {
         });
         // Ensure that .all() wasn't empty!
         result && sets_handled != 0
+    }
+
+    fn count_ones(&self) -> usize {
+        self.sub_blocks()
+            .iter()
+            .map(|b| b.count_ones() as usize)
+            .sum()
     }
 }
 
@@ -130,7 +159,7 @@ mod tests {
         let left_idx = base_collection.push_collection(&[250, 450]);
 
         let left = base_collection.get_set_ref(left_idx);
-        
+
         assert!(!left.is_subset(&fset));
         let combined = super::LazyAnd {
             left,
@@ -142,5 +171,28 @@ mod tests {
         assert!(!combined.is_subset(&fset));
         let values = combined.ones().collect::<Vec<_>>();
         println!("VALUES: {values:?} - {combined:?}");
+    }
+
+    #[test]
+    pub fn test_count_ones() {
+        let mut base_collection = SparseBitSetCollection::new();
+
+        let right_idx = base_collection.push_collection_itr((400..900));
+        let right = base_collection.get_set_ref(right_idx);
+        assert_eq!(right.count_ones(), 500);
+        
+        let left_idx = base_collection.push_collection(&[250, 450]);
+        let left = base_collection.get_set_ref(left_idx);
+        assert_eq!(left.count_ones(), 2);
+
+        let mut fset = FixedBitSet::with_capacity(1000);
+        fset.insert_range(400..600);
+        
+        let combined = super::LazyAnd {
+            left,
+            right: &fset,
+            _phantom: Default::default(),
+        };
+        assert_eq!(combined.count_ones(), 1);
     }
 }

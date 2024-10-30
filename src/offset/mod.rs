@@ -63,7 +63,6 @@ impl OffsetBitSetCollection {
         };
         let root_block_offset = first_item / SimdBlock::BITS;
 
-        let blocks_offset = self.blocks.len();
         let mut current_block_index = root_block_offset;
         let mut current_block = [0; SimdBlock::USIZE_COUNT];
         for bit in core::iter::once(first_item).chain(bits) {
@@ -82,12 +81,11 @@ impl OffsetBitSetCollection {
         // Push the final block
         self.blocks.push(SimdBlock::from_usize_array(current_block));
 
-        // Note the offset
+        // Note the offset, `blocks_offset` was already correct from the previous iteration.
         let new_entry = self
             .offsets
             .last_mut()
             .expect("Impossible invariant violation");
-        new_entry.blocks_offset = blocks_offset as u32;
         new_entry.root_bitset_offset = root_block_offset as u32;
         // Maintain the invariant
         self.offsets.push(PseudoOffset {

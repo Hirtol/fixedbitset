@@ -65,10 +65,7 @@ impl SparseBitSetCollection {
         let Some(first_item) = bits.next() else {
             panic!("Need a non-empty set");
         };
-
-        // We always have an empty sub_offset as the last item in the list to avoid branches
-        let sub_offset_idx = self.sub_offsets.len() - 1;
-
+        
         let root_block_offset = first_item / SimdBlock::BITS;
         let mut pseudo = PseudoOffset {
             blocks_offset: self.blocks.len() as u32,
@@ -123,14 +120,9 @@ impl SparseBitSetCollection {
         };
         // Maintain the invariant, marking the end of the sub-offsets
         self.sub_offsets.push(pseudo);
-
-        // Note the offset
-        let new_entry = self
-            .offsets
-            .last_mut()
-            .expect("Impossible invariant violation");
-        *new_entry = sub_offset_idx as u32;
+        
         // Maintain the invariant
+        // We always have an empty sub_offset as the last item in the list to avoid branches
         self.offsets.push(self.sub_offsets.len() as u32 - 1);
 
         self.len() - 1
@@ -160,13 +152,13 @@ impl SparseBitSetCollection {
     #[inline]
     pub unsafe fn get_s_set_ref_unchecked(&self, bit_set: usize) -> SparseBitSetRef<'_> {
         let offset = *self.offsets.get_unchecked(bit_set);
-        let next_offset = *self.offsets.get_unchecked(bit_set + 1) + 1;
+        let next_offset = *self.offsets.get_unchecked(bit_set + 1);
 
         SparseBitSetRef {
             bitsets: SparseOffsets {
                 offsets: self
                     .sub_offsets
-                    .get_unchecked(offset as usize..next_offset as usize),
+                    .get_unchecked(offset as usize..=next_offset as usize),
             },
             blocks: &self.blocks,
         }
@@ -212,7 +204,7 @@ impl<'a> SparseBitSet<'a, &'a [SimdBlock]> {
             }.map(move |i| i + offset)
         })
     }
-    
+
     /// Return the last set in this bitset.
     ///
     /// This differs from [Self::borrow_bit_sets] that the lifetime of the returned iterator and sets is _not_ dependent on `self`,
@@ -389,7 +381,6 @@ where
 {
     #[inline]
     fn next_back(&mut self) -> Option<U::Item> {
-        println!("EUGHG");
         self.consumed += 1;
         self.inner.next_back()
     }
@@ -426,7 +417,7 @@ impl<'a, T: AsRef<[SimdBlock]>> BitSet for SparseBitSet<'a, T> {
         let last_set = self.borrow_last_set();
         let final_len =
             last_set.root_block_offset as usize - recent_root_offset + last_set.blocks.len() + 1;
-        // println!("Estimating : {final_len} - {last_set:?} - {recent_root_offset}");
+        
         ExactSizeFlatten::new(
             final_len,
             self.borrow_bit_sets().flat_map(move |b| {
@@ -439,7 +430,6 @@ impl<'a, T: AsRef<[SimdBlock]>> BitSet for SparseBitSet<'a, T> {
 
     fn as_sub_blocks(&self) -> impl ExactSizeIterator<Item = Block> + DoubleEndedIterator {
         SimdToSubIter::new(self.as_simd_blocks())
-        // self.sub_blocks().iter().copied()
     }
 
     fn bit_len(&self) -> usize {
