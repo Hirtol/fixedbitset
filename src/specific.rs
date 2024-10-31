@@ -1,5 +1,5 @@
 use crate::iter::{OverlapState, SimdToSubIter};
-use crate::sparse::SparseBitSet;
+use crate::sparse::{SparseBitSet, SparseBitSetRef};
 use crate::FixedBitSet;
 use crate::SimdBlock;
 use std::marker::PhantomData;
@@ -51,6 +51,24 @@ impl<'a> SubBitSet<'a> for FixedBitSet {
 
     fn count_ones(&self) -> usize {
         self.count_ones(..)
+    }
+}
+
+impl FixedBitSet {
+    /// Compute the bitwise OR of this fixed bitset with the given sparse set.
+    pub fn sparse_union_with(&mut self, other: &SparseBitSetRef<'_>) {
+        other.bit_sets().for_each(|sub_set| {
+            let overlap = crate::iter::calculate_overlap(&sub_set, self);
+            // SAFETY: The calculating in `calculate_overlap` ensures that nothing is ever out of bounds.
+            unsafe {
+                sub_set
+                    .blocks
+                    .get_unchecked(overlap.left_offset..overlap.left_offset + overlap.overlap_len)
+                    .iter()
+                    .zip(self.as_mut_simd_slice().get_unchecked_mut(overlap.right_offset..))
+                    .for_each(|(x, y)| *y |= *x)
+            };
+        });
     }
 }
 
@@ -171,6 +189,25 @@ mod tests {
         assert!(!combined.is_subset(&fset));
         let values = combined.ones().collect::<Vec<_>>();
         println!("VALUES: {values:?} - {combined:?}");
+    }
+
+    #[test]
+    pub fn test_sparse_union() {
+        let mut fset = FixedBitSet::with_capacity(1000);
+        let mut fset2 = FixedBitSet::with_capacity(1000);
+        fset.insert_range(0..100);
+        fset2.insert_range(400..600);
+        
+        let mut base_collection = SparseBitSetCollection::new();
+
+        let left_idx = base_collection.push_collection(&[250, 450]);
+
+        let left = base_collection.get_set_ref(left_idx);
+        fset.sparse_union_with(&left);
+        
+        assert!(fset.contains(250));
+        assert!(fset.contains(450));
+        assert!(!fset.contains(500));
     }
 
     #[test]
