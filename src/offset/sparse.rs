@@ -253,6 +253,17 @@ impl<'a, T: AsRef<[SimdBlock]>> SparseBitSet<'a, T> {
         self.bitsets.offsets.iter().map(|off| off.root_bitset_offset as usize)
     }
 
+    /// Return **true** if the bit is enabled in the **FixedBitSet**,
+    /// **false** otherwise.
+    ///
+    /// Note: bits outside the capacity are always disabled.
+    #[inline]
+    pub fn contains(&self, bit: usize) -> bool {
+        self.borrow_bit_sets().any(|bitset| {
+            bitset.contains(bit)
+        })
+    }
+
     #[inline]
     pub(crate) fn borrow_bit_sets(
         &self,
@@ -587,6 +598,22 @@ impl<'a, T: AsRef<[SimdBlock]>> BitSet for SparseBitSet<'a, T> {
 //     impl<'a, T, I: FusedIterator<Item = (T, T)>> FusedIterator for SparseOverlapIter<'a, I> {}
 // }
 
+
+pub fn test_sparse_contains() {
+    let mut coll = SparseBitSetCollection::new();
+
+    let idx = coll.push_collection(&[1, 512]);
+    let idx2 = coll.push_collection(&[128]);
+
+    let set = coll.get_set_ref(idx);
+    let set2 = coll.get_set_ref(idx2);
+
+    assert!(set.contains(1));
+    assert!(!set.contains(235));
+    assert!(set.contains(512));
+    assert!(set2.contains(128));
+}
+
 #[cfg(test)]
 mod tests {
     use crate::generic::BitSet;
@@ -621,6 +648,22 @@ mod tests {
 
         assert!(!set.is_subset(&fset));
         assert!(set2.is_subset(&fset));
+    }
+
+    #[test]
+    pub fn test_sparse_contains() {
+        let mut coll = SparseBitSetCollection::new();
+
+        let idx = coll.push_collection(&[1, 512]);
+        let idx2 = coll.push_collection(&[128]);
+
+        let set = coll.get_set_ref(idx);
+        let set2 = coll.get_set_ref(idx2);
+
+        assert!(set.contains(1));
+        assert!(!set.contains(235));
+        assert!(set.contains(512));
+        assert!(set2.contains(128));
     }
 
     #[test]

@@ -1,11 +1,11 @@
 use crate::generic::BitSet;
-use crate::SimdBlock;
+use crate::{div_rem, SimdBlock, BITS};
 use crate::{Block, FixedBitSet, IndexRange};
 use alloc::vec::Vec;
 
 pub mod iter;
-pub mod sparse;
 pub mod iter_exact;
+pub mod sparse;
 
 pub type OffsetBitSetOwned = OffsetBitSet<Vec<SimdBlock>>;
 pub type OffsetBitSetRef<'a> = OffsetBitSet<&'a [SimdBlock]>;
@@ -243,7 +243,6 @@ pub struct OffsetBitSet<T> {
 }
 
 impl<T: AsRef<[SimdBlock]>> OffsetBitSet<T> {
-
     /// Return a reference to this [OffsetBitSet]
     pub fn as_ref(&self) -> OffsetBitSetRef<'_> {
         OffsetBitSetRef {
@@ -260,11 +259,42 @@ impl<T: AsRef<[SimdBlock]>> OffsetBitSet<T> {
         }
     }
 
-    /// Return the amount of [SimdBlock]s
+    /// Return **true** if the bit is enabled in the bitset,
+    /// **false** otherwise.
+    ///
+    /// Note: bits outside the capacity are always disabled.
+    #[inline(never)]
+    pub fn contains(&self, bit: usize) -> bool {
+        if let Some(offset) = bit.checked_sub(self.root_block_offset as usize * SimdBlock::BITS) {
+            (offset < self.len())
+                .then(|| {
+                    // SAFETY: We ensure that the offset we calculate is within range
+                    unsafe { self.contains_unchecked(offset) }
+                })
+                .unwrap_or(false)
+        } else {
+            false
+        }
+    }
+
+    /// Return **true** if the bit is enabled in the **FixedBitSet**,
+    /// **false** otherwise.
+    ///
+    /// Note: unlike `contains`, calling this with an invalid `bit`
+    /// is undefined behavior.
+    ///
+    /// # Safety
+    /// `bit` must be less than `self.len()`
+    #[inline]
+    pub unsafe fn contains_unchecked(&self, bit: usize) -> bool {
+        let (block, i) = div_rem(bit, BITS);
+        (self.get_unchecked(block) & (1 << i)) != 0
+    }
+
+    /// Return the amount of bits represented by this offset bitset.
     #[inline(always)]
-    #[allow(dead_code)]
     fn len(&self) -> usize {
-        self.as_simd_blocks().len()
+        self.ref_simd_blocks().len() * SimdBlock::BITS
     }
 
     /// Return the length of the OffsetBitSet if it was instead a full [FixedBitSet]
@@ -272,6 +302,11 @@ impl<T: AsRef<[SimdBlock]>> OffsetBitSet<T> {
     #[allow(dead_code)]
     fn root_block_len(&self) -> usize {
         self.root_block_offset as usize + self.len()
+    }
+
+    #[inline]
+    unsafe fn get_unchecked(&self, subblock: usize) -> &Block {
+        self.ref_sub_blocks().get_unchecked(subblock)
     }
 
     #[inline(always)]
