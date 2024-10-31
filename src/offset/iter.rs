@@ -167,14 +167,14 @@ impl<I: Iterator<Item = SimdBlock>> Iterator for SimdToSubIter<I> {
                 Some(out)
             }
             (_, Some(block)) => {
-                let out = block[(SimdBlock::USIZE_COUNT - 1) - self.last_idx];
-                let (next_value, overflow) = self.last_idx.overflowing_sub(1);
-                if overflow {
-                    // We know that there is nothing else, otherwise `current_block` would've been true
+                let current_idx = self.current_idx.min(self.last_idx);
+                let out = block[current_idx];
+                self.current_idx += 1;
+
+                if self.current_idx >= SimdBlock::USIZE_COUNT || self.current_idx > self.last_idx {
                     self.last_block = None;
-                    self.last_idx = SimdBlock::USIZE_COUNT - 1;
-                } else {
-                    self.last_idx = next_value;
+                    self.current_idx = 0;
+                    self.last_idx = 0;
                 }
 
                 Some(out)
@@ -212,13 +212,16 @@ impl<I: DoubleEndedIterator<Item = SimdBlock>> DoubleEndedIterator for SimdToSub
                 Some(out)
             }
             (Some(block), _) => {
-                let out = block[self.current_idx];
+                let last_idx = self.current_idx.max(self.last_idx);
+                let out = block[last_idx];
                 
-                self.current_idx += 1;
-
-                if self.current_idx >= SimdBlock::USIZE_COUNT {
+                let (next_value, overflow) = self.last_idx.overflowing_sub(1);
+                if overflow || next_value < self.current_idx {
                     self.current_block = None;
                     self.current_idx = 0;
+                    self.last_idx = 0;
+                } else {
+                    self.last_idx = next_value;
                 }
 
                 Some(out)
@@ -231,6 +234,8 @@ impl<I: DoubleEndedIterator<Item = SimdBlock>> DoubleEndedIterator for SimdToSub
 impl<I: ExactSizeIterator<Item = SimdBlock>> ExactSizeIterator for SimdToSubIter<I> {
     #[inline(always)]
     fn len(&self) -> usize {
-        self.itr.len() * SimdBlock::USIZE_COUNT
+        let current_remaining = self.current_block.is_some().then(|| SimdBlock::USIZE_COUNT - self.current_idx).unwrap_or(0);
+        let last_remaining = self.last_block.is_some().then(|| self.last_idx + 1).unwrap_or(0);
+        current_remaining + last_remaining + (self.itr.len() * SimdBlock::USIZE_COUNT)
     }
 }

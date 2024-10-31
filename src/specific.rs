@@ -165,16 +165,17 @@ mod tests {
     use super::SubBitSet;
     use crate::sparse::SparseBitSetCollection;
     use crate::FixedBitSet;
+    use crate::iter::SimdToSubIter;
 
     #[test]
     pub fn test_lazy_and_large() {
         let mut fset = FixedBitSet::with_capacity(1000);
         let mut fset2 = FixedBitSet::with_capacity(1000);
         fset.insert_range(0..100);
-        fset2.insert_range(400..600);
+        fset2.insert_range(400..999);
         let mut base_collection = SparseBitSetCollection::new();
 
-        let left_idx = base_collection.push_collection(&[250, 450]);
+        let left_idx = base_collection.push_collection(&[453, 454, 456, 457, 480, 489, 492, 494, 495, 497, 498, 500, 503, 504, 506, 595]);
 
         let left = base_collection.get_set_ref(left_idx);
 
@@ -187,6 +188,9 @@ mod tests {
 
         assert!(combined.is_subset(&fset2));
         assert!(!combined.is_subset(&fset));
+        let data= combined.anded().flat_map(|i| i.1).collect::<Vec<_>>();
+        let other_data = combined.anded().flat_map(|i| SimdToSubIter::new(i.1)).collect::<Vec<_>>();
+        println!("Data: {data:?}\nOther: {other_data:?}");
         let values = combined.ones().collect::<Vec<_>>();
         println!("VALUES: {values:?} - {combined:?}");
     }
