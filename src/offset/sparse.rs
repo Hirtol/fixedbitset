@@ -61,7 +61,7 @@ impl SparseBitSetCollection {
     ///
     /// # Returns
     /// The index to access the new [SparseBitSet]
-    pub fn push_collection_itr(&mut self, mut bits: impl ExactSizeIterator<Item = usize>) -> usize {
+    pub fn push_collection_itr(&mut self, mut bits: impl Iterator<Item = usize>) -> usize {
         let Some(first_item) = bits.next() else {
             panic!("Need a non-empty set");
         };
